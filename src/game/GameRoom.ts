@@ -114,7 +114,8 @@ export class GameRoom {
   }
 
   allReady(): boolean {
-    return this.state.players.length >= 2 && this.state.players.every(p => p.isReady);
+    // DEV: >= 1 for solo testing. Change to >= 2 for production.
+    return this.state.players.length >= 1 && this.state.players.every(p => p.isReady);
   }
 
   isTokenTaken(token: TokenType): boolean {
