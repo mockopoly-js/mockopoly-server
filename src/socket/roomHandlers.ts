@@ -119,6 +119,9 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       playerId,
       isReady: data.isReady,
     } satisfies S_PlayerReady);
+
+    // Broadcast full state so clients have the updated ready flag
+    io.to(roomCode).emit(EVENTS.GAME_STATE_UPDATE, { state: room.state } satisfies S_StateUpdate);
   });
 
   // ── Start Game ──────────────────────────────────────────────────────────────
