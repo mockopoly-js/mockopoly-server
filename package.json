@@ -19,6 +19,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.5",
     "@types/uuid": "^9.0.7",
+    "nodemon": "^3.1.14",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.3.3"
   }
