@@ -188,6 +188,10 @@ function handleLeave(io: Server, socket: Socket): void {
 
   socket.leave(roomCode);
 
+  // Clear socket metadata so it can join/create another room
+  (socket as any).roomCode = undefined;
+  (socket as any).playerId = undefined;
+
   if (room.state.status === 'lobby') {
     const player = room.getPlayer(playerId);
     room.removePlayer(playerId);
