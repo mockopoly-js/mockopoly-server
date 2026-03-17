@@ -634,6 +634,7 @@ export class GameRoom {
 
   advanceTurn(): string {
     const players = this.activePlayers;
+    if (players.length === 0) return this.state.turn.currentPlayerId; // no active players left
     const currentIdx = players.findIndex(p => p.id === this.state.turn.currentPlayerId);
     const nextIdx = (currentIdx + 1) % players.length;
     const nextPlayer = players[nextIdx];
