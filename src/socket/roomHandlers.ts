@@ -159,6 +159,19 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
 
       if (countdown < 0) {
         clearInterval(timer);
+
+        // DEV: Add dummy bot players for testing
+        const botNames = ['Alice', 'Bob', 'Carol'];
+        const allTokens: Array<'blue' | 'green' | 'yellow' | 'purple' | 'orange' | 'cyan' | 'pink' | 'red'> =
+          ['blue', 'green', 'yellow', 'purple', 'orange', 'cyan', 'pink', 'red'];
+        for (let i = 0; i < botNames.length; i++) {
+          const token = allTokens[i % allTokens.length];
+          const botId = `bot-${i}-${Date.now()}`;
+          room.addPlayer(botId, `bot-socket-${i}`, botNames[i], token, `bot-reconnect-${i}`, false);
+          const bot = room.getPlayer(botId);
+          if (bot) bot.isReady = true;
+        }
+
         room.startGame();
 
         io.to(roomCode).emit(EVENTS.GAME_STATE_UPDATE, { state: room.state } satisfies S_StateUpdate);

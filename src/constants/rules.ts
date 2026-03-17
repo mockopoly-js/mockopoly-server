@@ -8,7 +8,7 @@ export const RULES = {
   GO_TO_JAIL_INDEX: 30,
   GO_INDEX: 0,
   FREE_PARKING_INDEX: 20,
-  MAX_PLAYERS: 4,
+  MAX_PLAYERS: 24, // DEV: raised for bot testing
   MAX_HOUSES_PER_PROPERTY: 4,
   MAX_HOUSES_IN_BANK: 32,
   MAX_HOTELS_IN_BANK: 12,
