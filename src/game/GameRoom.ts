@@ -147,6 +147,17 @@ export class GameRoom {
       auctionState: null,
     };
 
+    // TODO: REMOVE — test code: give first player the brown color group for building testing
+    const testGroup = COLOR_GROUPS['brown']; // [1, 3]
+    for (const idx of testGroup) {
+      const prop = this.state.properties.find(p => p.spaceIndex === idx);
+      if (prop) {
+        prop.ownerId = firstPlayer.id;
+      }
+      firstPlayer.properties.push(idx);
+    }
+    this.addLog(null, 'system', `[TEST] ${firstPlayer.name} received brown properties for testing.`);
+
     this.addLog(null, 'system', `Game started! ${firstPlayer.name} goes first.`);
     this.touch();
   }
@@ -343,7 +354,7 @@ export class GameRoom {
     const space = BOARD_SPACES.find(s => s.index === spaceIndex)!;
     const prop = this.getPropertyState(spaceIndex)!;
     const player = this.getPlayer(playerId)!;
-    const refund = Math.floor(space.houseCost! / 2);
+    const refund = space.houseCost!;
 
     prop.houses--;
     player.money += refund;
@@ -356,7 +367,7 @@ export class GameRoom {
     const space = BOARD_SPACES.find(s => s.index === spaceIndex)!;
     const prop = this.getPropertyState(spaceIndex)!;
     const player = this.getPlayer(playerId)!;
-    const refund = Math.floor(space.houseCost! / 2);
+    const refund = space.houseCost!;
 
     prop.hasHotel = false;
     prop.houses = 4; // downgrade to 4 houses
