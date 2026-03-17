@@ -139,8 +139,9 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       return socket.emit(EVENTS.ERROR, { code: 'NOT_HOST', message: 'Only the host can start the game.' } satisfies S_Error);
     }
 
-    if (room.state.players.length < 2) {
-      return socket.emit(EVENTS.ERROR, { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players.' } satisfies S_Error);
+    // DEV: allow 1 player for testing. Change to < 2 for production.
+    if (room.state.players.length < 1) {
+      return socket.emit(EVENTS.ERROR, { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 1 player.' } satisfies S_Error);
     }
 
     if (!room.allReady()) {

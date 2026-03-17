@@ -4,7 +4,7 @@
   "description": "Real-time game server for Mockopoly — handles all game logic, state management and Socket.io multiplayer sync",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "nodemon --watch src --ext ts,json --exec ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
