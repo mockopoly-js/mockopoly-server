@@ -1,9 +1,9 @@
 // ─── Game Rules ───────────────────────────────────────────────────────────────
 
 export const RULES = {
-  STARTING_MONEY: 1500,
-  GO_SALARY: 200,
-  JAIL_FINE: 50,
+  STARTING_MONEY: 15000000,
+  GO_SALARY: 2000000,
+  JAIL_FINE: 500000,
   JAIL_SPACE_INDEX: 10,
   GO_TO_JAIL_INDEX: 30,
   GO_INDEX: 0,
