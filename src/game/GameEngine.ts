@@ -106,14 +106,6 @@ export class GameEngine {
       return 'All properties in the color group must be unmortgaged.';
     }
 
-    // Even building rule: cannot build unless this is the lowest in group
-    const minHouses = Math.min(...group.map(idx => {
-      const p = room.getPropertyState(idx)!;
-      return p.hasHotel ? 5 : p.houses;
-    }));
-    const current = prop.houses;
-    if (current > minHouses) return 'You must build evenly across the color group.';
-
     if (player.money < space.houseCost!) return 'You cannot afford a house.';
 
     return null;
@@ -133,16 +125,6 @@ export class GameEngine {
     if (prop.hasHotel) return 'Property already has a hotel.';
     if (prop.houses < RULES.MAX_HOUSES_PER_PROPERTY) return 'Need 4 houses before building a hotel.';
 
-    // Even building: all others in group must have 4 houses or a hotel
-    const group = COLOR_GROUPS[space.colorGroup!];
-    for (const idx of group) {
-      if (idx === spaceIndex) continue;
-      const p = room.getPropertyState(idx)!;
-      if (!p.hasHotel && p.houses < RULES.MAX_HOUSES_PER_PROPERTY) {
-        return 'You must build evenly across the color group.';
-      }
-    }
-
     if (player.money < space.houseCost!) return 'You cannot afford a hotel.';
 
     return null;
@@ -154,15 +136,6 @@ export class GameEngine {
     if (prop.ownerId !== playerId) return 'You do not own this property.';
     if (prop.houses <= 0) return 'No houses to sell.';
     if (prop.hasHotel) return 'Sell the hotel first.';
-
-    // Even selling: cannot sell if this would make it lower than others in group
-    const space = BOARD_SPACES.find(s => s.index === spaceIndex)!;
-    const group = COLOR_GROUPS[space.colorGroup!];
-    const maxHouses = Math.max(...group.map(idx => {
-      const p = room.getPropertyState(idx)!;
-      return p.hasHotel ? 5 : p.houses;
-    }));
-    if (prop.houses < maxHouses) return 'You must sell evenly across the color group.';
 
     return null;
   }
@@ -305,8 +278,8 @@ export class GameEngine {
         total += space.mortgageValue!;
       }
       if (space.houseCost) {
-        total += prop.houses * Math.floor(space.houseCost / 2);
-        if (prop.hasHotel) total += Math.floor(space.houseCost / 2);
+        total += prop.houses * space.houseCost;
+        if (prop.hasHotel) total += space.houseCost;
       }
     }
 
