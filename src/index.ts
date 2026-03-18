@@ -5,6 +5,8 @@ import cors from 'cors';
 import { registerRoomHandlers } from './socket/roomHandlers';
 import { registerGameHandlers } from './socket/gameHandlers';
 import { registerTradeHandlers } from './socket/tradeHandlers';
+import { registerPartnershipHandlers } from './socket/partnershipHandlers';
+import { registerDealHandlers } from './socket/dealHandlers';
 import { gameManager } from './game/GameManager';
 
 const app = express();
@@ -37,6 +39,8 @@ io.on('connection', (socket) => {
   registerRoomHandlers(io, socket);
   registerGameHandlers(io, socket);
   registerTradeHandlers(io, socket);
+  registerPartnershipHandlers(io, socket);
+  registerDealHandlers(io, socket);
 });
 
 // Periodic cleanup of idle rooms (every 10 minutes)

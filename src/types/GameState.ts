@@ -126,6 +126,54 @@ export interface AuctionState {
   status: 'active' | 'complete';
 }
 
+// ─── Partnership ─────────────────────────────────────────────────────────────
+
+export interface PartnershipEquity {
+  playerId: string;
+  percentage: number;           // 1–99, all partners must sum to 100
+}
+
+export interface Partnership {
+  partnershipId: string;
+  colorGroup: ColorGroup;
+  partners: PartnershipEquity[];  // 2–3 entries
+  status: 'pending' | 'active';
+  createdAt: number;
+}
+
+export interface PartnershipProposal {
+  proposalId: string;
+  initiatorId: string;
+  colorGroup: ColorGroup;
+  proposedEquity: PartnershipEquity[];
+  acceptedPlayerIds: string[];    // initiator is auto-accepted
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+}
+
+export interface PartnershipDissolutionRequest {
+  dissolutionId: string;
+  partnershipId: string;
+  requesterId: string;
+  acceptedPlayerIds: string[];
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+}
+
+// ─── Rent Deal ───────────────────────────────────────────────────────────────
+
+export interface RentDeal {
+  dealId: string;
+  debtorId: string;
+  creditorIds: string[];          // 1 player or multiple (partnership)
+  spaceIndex: number;
+  totalRentOwed: number;
+  offeredProperties: number[];    // debtor's properties being given to creditor
+  offeredMoney: number;           // debtor's cash being given to creditor
+  requestedExemption: number;     // amount of rent creditor will exempt (up to totalRentOwed)
+  lastOfferBy: string;            // playerId who made the last offer/counter
+  acceptedPlayerIds: string[];
+  status: 'pending' | 'accepted' | 'rejected' | 'countered' | 'cancelled';
+}
+
 // ─── Player ───────────────────────────────────────────────────────────────────
 
 export interface Player {
@@ -143,6 +191,8 @@ export interface Player {
   isHost: boolean;
   isReady: boolean;
   reconnectToken: string;     // stored in client localStorage for rejoin
+  goDeductionsUsed: number;   // 0–5, lifetime GO deductions taken
+  goSkipsRemaining: number;   // GO salary skips remaining from deductions
 }
 
 // ─── Property State ───────────────────────────────────────────────────────────
@@ -172,7 +222,7 @@ export interface TurnState {
 
 // ─── Game Log ─────────────────────────────────────────────────────────────────
 
-export type GameLogType = 'action' | 'system' | 'card' | 'trade';
+export type GameLogType = 'action' | 'system' | 'card' | 'trade' | 'partnership';
 
 export interface GameLogEntry {
   timestamp: number;
@@ -203,6 +253,11 @@ export interface GameState {
   chanceDiscard: number[];
   turn: TurnState;
   activeTrade: TradeOffer | null;
+  partnerships: Partnership[];
+  activePartnershipProposal: PartnershipProposal | null;
+  activePartnershipDissolution: PartnershipDissolutionRequest | null;
+  freeParkingPool: number;
+  activeRentDeal: RentDeal | null;
   log: GameLogEntry[];
   config: GameConfig;
   winnerId: string | null;

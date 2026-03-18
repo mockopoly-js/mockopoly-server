@@ -99,6 +99,8 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
 
     socket.emit(EVENTS.ROOM_JOINED, { state: room.state } satisfies S_RoomJoined);
     socket.to(roomCode).emit(EVENTS.ROOM_PLAYER_JOINED, { player } satisfies S_PlayerJoined);
+    // Broadcast updated state so all clients (including host) see the new player
+    io.to(roomCode).emit(EVENTS.GAME_STATE_UPDATE, { state: room.state } satisfies S_StateUpdate);
 
     console.log(`[room] ${playerName} joined room ${roomCode} (${room.state.players.length} players)`);
   });
@@ -139,9 +141,8 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       return socket.emit(EVENTS.ERROR, { code: 'NOT_HOST', message: 'Only the host can start the game.' } satisfies S_Error);
     }
 
-    // DEV: allow 1 player for testing. Change to < 2 for production.
-    if (room.state.players.length < 1) {
-      return socket.emit(EVENTS.ERROR, { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 1 player.' } satisfies S_Error);
+    if (room.state.players.length < 2) {
+      return socket.emit(EVENTS.ERROR, { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players.' } satisfies S_Error);
     }
 
     if (!room.allReady()) {
