@@ -2,6 +2,8 @@ import { v4 as uuid } from 'uuid';
 import type {
   GameState, Player, PropertyState, TurnState, GameLogEntry,
   GameLogType, TokenType, DrawnCard, TradeOffer, AuctionState,
+  Partnership, PartnershipProposal, PartnershipDissolutionRequest,
+  PartnershipEquity, RentDeal, ColorGroup,
 } from '../types/GameState';
 import { BOARD_SPACES, PURCHASABLE_SPACES, COLOR_GROUPS } from '../constants/board';
 import { RULES } from '../constants/rules';
@@ -33,6 +35,11 @@ export class GameRoom {
       chanceDiscard: [],
       turn: this.emptyTurn(),
       activeTrade: null,
+      partnerships: [],
+      activePartnershipProposal: null,
+      activePartnershipDissolution: null,
+      freeParkingPool: 0,
+      activeRentDeal: null,
       log: [],
       config: {
         maxPlayers: RULES.MAX_PLAYERS,
@@ -58,6 +65,7 @@ export class GameRoom {
       properties: [], isJailed: false, jailTurns: 0, jailCardCount: 0,
       isBankrupt: false, isConnected: true, isHost, isReady: false,
       reconnectToken,
+      goDeductionsUsed: 0, goSkipsRemaining: 0,
     };
     this.state.players.push(player);
     this.socketMap.push({ playerId, socketId });
@@ -114,8 +122,7 @@ export class GameRoom {
   }
 
   allReady(): boolean {
-    // DEV: >= 1 for solo testing. Change to >= 2 for production.
-    return this.state.players.length >= 1 && this.state.players.every(p => p.isReady);
+    return this.state.players.length >= 2 && this.state.players.every(p => p.isReady);
   }
 
   isTokenTaken(token: TokenType): boolean {
@@ -146,17 +153,6 @@ export class GameRoom {
       pendingCard: null,
       auctionState: null,
     };
-
-    // TODO: REMOVE — test code: give first player the brown color group for building testing
-    const testGroup = COLOR_GROUPS['brown']; // [1, 3]
-    for (const idx of testGroup) {
-      const prop = this.state.properties.find(p => p.spaceIndex === idx);
-      if (prop) {
-        prop.ownerId = firstPlayer.id;
-      }
-      firstPlayer.properties.push(idx);
-    }
-    this.addLog(null, 'system', `[TEST] ${firstPlayer.name} received brown properties for testing.`);
 
     this.addLog(null, 'system', `Game started! ${firstPlayer.name} goes first.`);
     this.touch();
@@ -196,8 +192,13 @@ export class GameRoom {
     this.state.turn.phase = 'moving';
 
     if (passedGo) {
-      player.money += RULES.GO_SALARY;
-      this.addLog(playerId, 'action', `${player.name} passed GO and collected £${RULES.GO_SALARY}.`);
+      if (player.goSkipsRemaining > 0) {
+        player.goSkipsRemaining--;
+        this.addLog(playerId, 'action', `${player.name} passed GO but salary is skipped (GO deduction — ${player.goSkipsRemaining} skips remaining).`);
+      } else {
+        player.money += RULES.GO_SALARY;
+        this.addLog(playerId, 'action', `${player.name} passed GO and collected £${RULES.GO_SALARY}.`);
+      }
     }
 
     this.touch();
@@ -212,8 +213,13 @@ export class GameRoom {
     player.position = targetIndex;
 
     if (passedGo) {
-      player.money += RULES.GO_SALARY;
-      this.addLog(playerId, 'action', `${player.name} passed GO and collected £${RULES.GO_SALARY}.`);
+      if (player.goSkipsRemaining > 0) {
+        player.goSkipsRemaining--;
+        this.addLog(playerId, 'action', `${player.name} passed GO but salary is skipped (GO deduction — ${player.goSkipsRemaining} skips remaining).`);
+      } else {
+        player.money += RULES.GO_SALARY;
+        this.addLog(playerId, 'action', `${player.name} passed GO and collected £${RULES.GO_SALARY}.`);
+      }
     }
 
     this.touch();
@@ -535,8 +541,43 @@ export class GameRoom {
   payTax(playerId: string, amount: number): void {
     const player = this.getPlayer(playerId)!;
     player.money -= amount;
-    this.addLog(playerId, 'action', `${player.name} paid £${amount} tax.`);
+    this.addToFreeParking(amount);
+    this.addLog(playerId, 'action', `${player.name} paid £${amount} tax (added to Free Parking pool).`);
     this.touch();
+  }
+
+  // ── Free Parking Pool ─────────────────────────────────────────────────────
+
+  addToFreeParking(amount: number): void {
+    this.state.freeParkingPool += amount;
+    this.touch();
+  }
+
+  collectFreeParking(playerId: string): number {
+    const amount = this.state.freeParkingPool;
+    if (amount <= 0) return 0;
+
+    const player = this.getPlayer(playerId)!;
+    player.money += amount;
+    this.state.freeParkingPool = 0;
+    this.addLog(playerId, 'action', `${player.name} collected £${amount} from Free Parking!`);
+    this.touch();
+    return amount;
+  }
+
+  // ── GO Deduction ──────────────────────────────────────────────────────────
+
+  goDeduction(playerId: string, count: number): number {
+    const player = this.getPlayer(playerId)!;
+    const amount = count * RULES.GO_SALARY;
+
+    player.money += amount;
+    player.goDeductionsUsed += count;
+    player.goSkipsRemaining += count;
+
+    this.addLog(playerId, 'action', `${player.name} took a GO deduction of £${amount} (${player.goDeductionsUsed}/5 used).`);
+    this.touch();
+    return amount;
   }
 
   // ── Trade ───────────────────────────────────────────────────────────────────
@@ -647,8 +688,7 @@ export class GameRoom {
     const players = this.activePlayers;
     if (players.length === 0) return this.state.turn.currentPlayerId;
     const currentIdx = players.findIndex(p => p.id === this.state.turn.currentPlayerId);
-    // DEV: keep same player's turn forever. Change to (currentIdx + 1) for production.
-    const nextIdx = currentIdx >= 0 ? currentIdx : 0;
+    const nextIdx = (currentIdx + 1) % players.length;
     const nextPlayer = players[nextIdx];
 
     this.state.turn = {
@@ -721,6 +761,385 @@ export class GameRoom {
       this.addLog(null, 'system', `${this.activePlayers[0].name} wins the game!`);
     }
 
+    this.touch();
+  }
+
+  // ── Partnership ────────────────────────────────────────────────────────────
+
+  createPartnershipProposal(proposal: PartnershipProposal): void {
+    this.state.activePartnershipProposal = proposal;
+    this.touch();
+  }
+
+  acceptPartnershipProposal(playerId: string): boolean {
+    const proposal = this.state.activePartnershipProposal;
+    if (!proposal) return false;
+
+    if (!proposal.acceptedPlayerIds.includes(playerId)) {
+      proposal.acceptedPlayerIds.push(playerId);
+    }
+
+    // Check if all proposed partners have accepted
+    const allAccepted = proposal.proposedEquity.every(
+      eq => proposal.acceptedPlayerIds.includes(eq.playerId)
+    );
+
+    if (allAccepted) {
+      proposal.status = 'accepted';
+      this.formPartnership(proposal);
+      this.state.activePartnershipProposal = null;
+      return true; // partnership formed
+    }
+
+    this.touch();
+    return false; // still waiting
+  }
+
+  rejectPartnershipProposal(): void {
+    if (this.state.activePartnershipProposal) {
+      this.state.activePartnershipProposal.status = 'rejected';
+      this.state.activePartnershipProposal = null;
+    }
+    this.touch();
+  }
+
+  cancelPartnershipProposal(): void {
+    if (this.state.activePartnershipProposal) {
+      this.state.activePartnershipProposal.status = 'cancelled';
+      this.state.activePartnershipProposal = null;
+    }
+    this.touch();
+  }
+
+  private formPartnership(proposal: PartnershipProposal): Partnership {
+    const partnership: Partnership = {
+      partnershipId: uuid(),
+      colorGroup: proposal.colorGroup,
+      partners: proposal.proposedEquity.map(eq => ({ ...eq })),
+      status: 'active',
+      createdAt: Date.now(),
+    };
+    this.state.partnerships.push(partnership);
+    this.addLog(null, 'partnership', `Partnership formed on ${proposal.colorGroup} zone!`);
+    this.touch();
+    return partnership;
+  }
+
+  getPartnershipForGroup(colorGroup: ColorGroup): Partnership | undefined {
+    return this.state.partnerships.find(
+      p => p.colorGroup === colorGroup && p.status === 'active'
+    );
+  }
+
+  getPartnershipById(partnershipId: string): Partnership | undefined {
+    return this.state.partnerships.find(p => p.partnershipId === partnershipId);
+  }
+
+  isPropertyInPartnership(spaceIndex: number): boolean {
+    const space = BOARD_SPACES.find(s => s.index === spaceIndex);
+    if (!space || !space.colorGroup) return false;
+    return !!this.getPartnershipForGroup(space.colorGroup);
+  }
+
+  createDissolutionRequest(request: PartnershipDissolutionRequest): void {
+    this.state.activePartnershipDissolution = request;
+    this.touch();
+  }
+
+  acceptDissolution(playerId: string): boolean {
+    const req = this.state.activePartnershipDissolution;
+    if (!req) return false;
+
+    if (!req.acceptedPlayerIds.includes(playerId)) {
+      req.acceptedPlayerIds.push(playerId);
+    }
+
+    const partnership = this.getPartnershipById(req.partnershipId);
+    if (!partnership) return false;
+
+    const allAccepted = partnership.partners.every(
+      p => req.acceptedPlayerIds.includes(p.playerId)
+    );
+
+    if (allAccepted) {
+      req.status = 'accepted';
+      this.dissolvePartnership(partnership);
+      this.state.activePartnershipDissolution = null;
+      return true;
+    }
+
+    this.touch();
+    return false;
+  }
+
+  rejectDissolution(): void {
+    if (this.state.activePartnershipDissolution) {
+      this.state.activePartnershipDissolution.status = 'rejected';
+      this.state.activePartnershipDissolution = null;
+    }
+    this.touch();
+  }
+
+  dissolvePartnership(partnership: Partnership): { playerId: string; amount: number }[] {
+    const group = COLOR_GROUPS[partnership.colorGroup];
+    const refunds: { playerId: string; amount: number }[] = [];
+
+    // Sell all buildings and split refund by equity
+    let totalBuildingValue = 0;
+    for (const idx of group) {
+      const prop = this.getPropertyState(idx)!;
+      const space = BOARD_SPACES.find(s => s.index === idx)!;
+
+      if (prop.hasHotel) {
+        totalBuildingValue += space.houseCost! * 5; // 4 houses + hotel
+        prop.hasHotel = false;
+      }
+      totalBuildingValue += prop.houses * space.houseCost!;
+      prop.houses = 0;
+    }
+
+    // Split refund by equity
+    if (totalBuildingValue > 0) {
+      let distributed = 0;
+      const sorted = [...partnership.partners].sort((a, b) => b.percentage - a.percentage);
+      for (let i = 0; i < sorted.length; i++) {
+        const share = i === 0
+          ? totalBuildingValue - distributed // remainder to highest
+          : Math.floor(totalBuildingValue * sorted[i].percentage / 100);
+        if (i !== 0) distributed += share;
+        else {
+          // Calculate others first
+          let othersTotal = 0;
+          for (let j = 1; j < sorted.length; j++) {
+            othersTotal += Math.floor(totalBuildingValue * sorted[j].percentage / 100);
+          }
+          const highestShare = totalBuildingValue - othersTotal;
+          const player = this.getPlayer(sorted[0].playerId);
+          if (player) player.money += highestShare;
+          refunds.push({ playerId: sorted[0].playerId, amount: highestShare });
+          distributed = othersTotal;
+          continue;
+        }
+        const player = this.getPlayer(sorted[i].playerId);
+        if (player) player.money += share;
+        refunds.push({ playerId: sorted[i].playerId, amount: share });
+      }
+    }
+
+    partnership.status = 'pending'; // mark inactive
+    this.state.partnerships = this.state.partnerships.filter(
+      p => p.partnershipId !== partnership.partnershipId
+    );
+
+    this.addLog(null, 'partnership', `Partnership on ${partnership.colorGroup} zone dissolved.`);
+    this.touch();
+    return refunds;
+  }
+
+  /** Split rent among partnership partners by equity */
+  collectPartnershipRent(
+    fromId: string, spaceIndex: number, totalRent: number, partnership: Partnership,
+  ): { playerId: string; amount: number }[] {
+    const from = this.getPlayer(fromId)!;
+    from.money -= totalRent;
+
+    const splits: { playerId: string; amount: number }[] = [];
+    const sorted = [...partnership.partners].sort((a, b) => b.percentage - a.percentage);
+    let distributed = 0;
+
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const share = i === 0
+        ? totalRent - distributed // remainder to highest equity
+        : Math.floor(totalRent * sorted[i].percentage / 100);
+      distributed += share;
+
+      const partner = this.getPlayer(sorted[i].playerId);
+      if (partner) partner.money += share;
+      splits.push({ playerId: sorted[i].playerId, amount: share });
+    }
+
+    const space = BOARD_SPACES.find(s => s.index === spaceIndex)!;
+    this.addLog(fromId, 'action', `${from.name} paid £${totalRent} rent on ${space.name} (split among partners).`);
+    this.touch();
+    return splits;
+  }
+
+  /** Handle partner bankruptcy — transfer properties and redistribute equity */
+  handlePartnerBankruptcy(playerId: string): void {
+    const partnershipsCopy = [...this.state.partnerships];
+
+    for (const partnership of partnershipsCopy) {
+      if (partnership.status !== 'active') continue;
+      const partnerIdx = partnership.partners.findIndex(p => p.playerId === playerId);
+      if (partnerIdx === -1) continue;
+
+      const group = COLOR_GROUPS[partnership.colorGroup];
+      const bankruptPartner = partnership.partners[partnerIdx];
+      const remaining = partnership.partners.filter(p => p.playerId !== playerId);
+
+      if (remaining.length === 1) {
+        // 2-player partnership: surviving partner gets full ownership
+        const survivor = this.getPlayer(remaining[0].playerId);
+        if (survivor) {
+          for (const idx of group) {
+            const prop = this.getPropertyState(idx)!;
+            if (prop.ownerId === playerId) {
+              prop.ownerId = survivor.id;
+              survivor.properties.push(idx);
+            }
+          }
+        }
+        this.state.partnerships = this.state.partnerships.filter(
+          p => p.partnershipId !== partnership.partnershipId
+        );
+        this.addLog(null, 'partnership', `${remaining[0].playerId} inherited ${partnership.colorGroup} zone properties.`);
+      } else {
+        // 3-player partnership: redistribute equity
+        const totalRemaining = remaining.reduce((sum, p) => sum + p.percentage, 0);
+        for (const p of remaining) {
+          p.percentage = Math.round(p.percentage / totalRemaining * 100);
+        }
+        // Fix rounding — ensure sum is 100
+        const sum = remaining.reduce((s, p) => s + p.percentage, 0);
+        if (sum !== 100) remaining[0].percentage += 100 - sum;
+
+        partnership.partners = remaining;
+
+        // Transfer bankrupt player's properties to remaining partners (distribute)
+        for (const idx of group) {
+          const prop = this.getPropertyState(idx)!;
+          if (prop.ownerId === playerId) {
+            // Give to highest equity partner
+            const highest = remaining.sort((a, b) => b.percentage - a.percentage)[0];
+            const newOwner = this.getPlayer(highest.playerId);
+            if (newOwner) {
+              prop.ownerId = newOwner.id;
+              newOwner.properties.push(idx);
+            }
+          }
+        }
+        this.addLog(null, 'partnership', `Partnership on ${partnership.colorGroup} zone restructured after bankruptcy.`);
+      }
+    }
+
+    this.touch();
+  }
+
+  // ── Rent Deal ─────────────────────────────────────────────────────────────
+
+  createRentDeal(deal: RentDeal): void {
+    this.state.activeRentDeal = deal;
+    this.touch();
+  }
+
+  acceptRentDeal(playerId: string): boolean {
+    const deal = this.state.activeRentDeal;
+    if (!deal) return false;
+
+    if (!deal.acceptedPlayerIds.includes(playerId)) {
+      deal.acceptedPlayerIds.push(playerId);
+    }
+
+    // When last offer was by debtor → all creditors must accept
+    // When last offer was by a creditor → debtor must accept
+    const lastByDebtor = deal.lastOfferBy === deal.debtorId;
+    let allAccepted: boolean;
+    if (lastByDebtor) {
+      allAccepted = deal.creditorIds.every(id => deal.acceptedPlayerIds.includes(id));
+    } else {
+      allAccepted = deal.acceptedPlayerIds.includes(deal.debtorId);
+    }
+
+    if (allAccepted) {
+      deal.status = 'accepted';
+      this.executeRentDeal(deal);
+      this.state.activeRentDeal = null;
+      return true;
+    }
+
+    this.touch();
+    return false;
+  }
+
+  rejectRentDeal(): void {
+    if (this.state.activeRentDeal) {
+      this.state.activeRentDeal.status = 'rejected';
+      this.state.activeRentDeal = null;
+    }
+    this.touch();
+  }
+
+  cancelRentDeal(): void {
+    if (this.state.activeRentDeal) {
+      this.state.activeRentDeal.status = 'cancelled';
+      this.state.activeRentDeal = null;
+    }
+    this.touch();
+  }
+
+  counterRentDeal(newDeal: RentDeal): void {
+    this.state.activeRentDeal = newDeal;
+    this.touch();
+  }
+
+  private executeRentDeal(deal: RentDeal): void {
+    const debtor = this.getPlayer(deal.debtorId)!;
+
+    // Transfer offered properties to creditor(s)
+    // If multiple creditors (partnership), properties go to first creditor for simplicity
+    const primaryCreditor = this.getPlayer(deal.creditorIds[0])!;
+    for (const idx of deal.offeredProperties) {
+      debtor.properties = debtor.properties.filter(p => p !== idx);
+      primaryCreditor.properties.push(idx);
+      const prop = this.getPropertyState(idx)!;
+      prop.ownerId = primaryCreditor.id;
+    }
+
+    // Transfer offered money to creditor(s), split by equity if partnership
+    if (deal.offeredMoney > 0) {
+      debtor.money -= deal.offeredMoney;
+      if (deal.creditorIds.length === 1) {
+        primaryCreditor.money += deal.offeredMoney;
+      } else {
+        // Split among partnership creditors
+        const partnership = this.state.partnerships.find(p =>
+          p.status === 'active' && p.partners.some(eq => eq.playerId === deal.creditorIds[0])
+        );
+        if (partnership) {
+          let distributed = 0;
+          const sorted = [...partnership.partners]
+            .filter(p => deal.creditorIds.includes(p.playerId))
+            .sort((a, b) => b.percentage - a.percentage);
+          for (let i = sorted.length - 1; i >= 0; i--) {
+            const share = i === 0
+              ? deal.offeredMoney - distributed
+              : Math.floor(deal.offeredMoney * sorted[i].percentage / 100);
+            distributed += share;
+            const creditor = this.getPlayer(sorted[i].playerId);
+            if (creditor) creditor.money += share;
+          }
+        } else {
+          // Fallback: split equally
+          const perCreditor = Math.floor(deal.offeredMoney / deal.creditorIds.length);
+          for (const cId of deal.creditorIds) {
+            const creditor = this.getPlayer(cId);
+            if (creditor) creditor.money += perCreditor;
+          }
+        }
+      }
+    }
+
+    // Reduce pending rent by exempted amount
+    if (deal.requestedExemption > 0 && this.state.turn.mustPayRent) {
+      const remaining = (this.state.turn.rentAmount || 0) - deal.requestedExemption;
+      if (remaining <= 0) {
+        this.clearPendingRent();
+      } else {
+        this.state.turn.rentAmount = remaining;
+      }
+    }
+
+    this.addLog(deal.debtorId, 'action', `Rent deal completed — £${deal.requestedExemption} exempted.`);
     this.touch();
   }
 

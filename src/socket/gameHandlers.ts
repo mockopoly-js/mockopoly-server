@@ -10,6 +10,7 @@ import type {
   S_MortgageApplied, S_MortgageLifteed,
   S_HouseAdded, S_HotelAdded, S_HouseSold, S_HotelSold,
   S_PlayerBankrupt, S_GameOver, S_Error,
+  S_FreeParkingCollected, S_PartnershipRentSplit, S_PartnershipBuildCostSplit,
 } from '../types/SocketEvents';
 import { gameManager } from '../game/GameManager';
 import { GameEngine } from '../game/GameEngine';
@@ -268,12 +269,45 @@ export function registerGameHandlers(io: Server, socket: Socket): void {
     const err = GameEngine.canBuildHouse(room, playerId, data.spaceIndex);
     if (err) return emitError(socket, err);
 
-    room.addHouse(playerId, data.spaceIndex);
-    const prop = room.getPropertyState(data.spaceIndex)!;
+    const space = BOARD_SPACES.find(s => s.index === data.spaceIndex)!;
+    const partnership = space.colorGroup ? room.getPartnershipForGroup(space.colorGroup) : undefined;
 
-    io.to(roomCode).emit(EVENTS.BUILD_HOUSE_ADDED, {
-      playerId, spaceIndex: data.spaceIndex, newCount: prop.houses,
-    } satisfies S_HouseAdded);
+    if (partnership) {
+      // Partnership building — split costs by equity
+      const totalCost = space.houseCost!;
+      const splits: { playerId: string; amount: number }[] = [];
+      const sorted = [...partnership.partners].sort((a, b) => b.percentage - a.percentage);
+      let distributed = 0;
+
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const share = i === 0
+          ? totalCost - distributed
+          : Math.floor(totalCost * sorted[i].percentage / 100);
+        distributed += share;
+
+        const partner = room.getPlayer(sorted[i].playerId);
+        if (partner) partner.money -= share;
+        splits.push({ playerId: sorted[i].playerId, amount: share });
+      }
+
+      const prop = room.getPropertyState(data.spaceIndex)!;
+      prop.houses++;
+      room.addLog(playerId, 'action', `Partners built a house on ${space.name} (${prop.houses} houses).`);
+
+      io.to(roomCode).emit(EVENTS.PARTNERSHIP_BUILD_COST_SPLIT, {
+        spaceIndex: data.spaceIndex, splits,
+      } satisfies S_PartnershipBuildCostSplit);
+      io.to(roomCode).emit(EVENTS.BUILD_HOUSE_ADDED, {
+        playerId, spaceIndex: data.spaceIndex, newCount: prop.houses,
+      } satisfies S_HouseAdded);
+    } else {
+      room.addHouse(playerId, data.spaceIndex);
+      const prop = room.getPropertyState(data.spaceIndex)!;
+
+      io.to(roomCode).emit(EVENTS.BUILD_HOUSE_ADDED, {
+        playerId, spaceIndex: data.spaceIndex, newCount: prop.houses,
+      } satisfies S_HouseAdded);
+    }
     broadcastState(io, roomCode);
   });
 
@@ -285,11 +319,45 @@ export function registerGameHandlers(io: Server, socket: Socket): void {
     const err = GameEngine.canBuildHotel(room, playerId, data.spaceIndex);
     if (err) return emitError(socket, err);
 
-    room.addHotel(playerId, data.spaceIndex);
+    const space = BOARD_SPACES.find(s => s.index === data.spaceIndex)!;
+    const partnership = space.colorGroup ? room.getPartnershipForGroup(space.colorGroup) : undefined;
 
-    io.to(roomCode).emit(EVENTS.BUILD_HOTEL_ADDED, {
-      playerId, spaceIndex: data.spaceIndex,
-    } satisfies S_HotelAdded);
+    if (partnership) {
+      // Partnership hotel — split costs by equity
+      const totalCost = space.houseCost!;
+      const splits: { playerId: string; amount: number }[] = [];
+      const sorted = [...partnership.partners].sort((a, b) => b.percentage - a.percentage);
+      let distributed = 0;
+
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const share = i === 0
+          ? totalCost - distributed
+          : Math.floor(totalCost * sorted[i].percentage / 100);
+        distributed += share;
+
+        const partner = room.getPlayer(sorted[i].playerId);
+        if (partner) partner.money -= share;
+        splits.push({ playerId: sorted[i].playerId, amount: share });
+      }
+
+      const prop = room.getPropertyState(data.spaceIndex)!;
+      prop.houses = 0;
+      prop.hasHotel = true;
+      room.addLog(playerId, 'action', `Partners built a hotel on ${space.name}!`);
+
+      io.to(roomCode).emit(EVENTS.PARTNERSHIP_BUILD_COST_SPLIT, {
+        spaceIndex: data.spaceIndex, splits,
+      } satisfies S_PartnershipBuildCostSplit);
+      io.to(roomCode).emit(EVENTS.BUILD_HOTEL_ADDED, {
+        playerId, spaceIndex: data.spaceIndex,
+      } satisfies S_HotelAdded);
+    } else {
+      room.addHotel(playerId, data.spaceIndex);
+
+      io.to(roomCode).emit(EVENTS.BUILD_HOTEL_ADDED, {
+        playerId, spaceIndex: data.spaceIndex,
+      } satisfies S_HotelAdded);
+    }
     broadcastState(io, roomCode);
   });
 
@@ -420,6 +488,9 @@ export function registerGameHandlers(io: Server, socket: Socket): void {
     const player = room.getPlayer(playerId)!;
     if (player.isBankrupt) return;
 
+    // Handle partnership dissolution for bankrupt player
+    room.handlePartnerBankruptcy(playerId);
+
     // Determine creditor (whoever they owe rent to, or bank)
     const creditorId = room.state.turn.rentOwnerId;
     room.declareBankruptcy(playerId, creditorId);
@@ -470,24 +541,59 @@ function handleLanding(
         room.setPhase('action');
         broadcastState(io, roomCode);
       } else if (prop.ownerId !== playerId && !prop.isMortgaged) {
-        // Owned by someone else — pay rent
-        const rent = room.calculateRent(spaceIndex, room.diceTotal());
-        if (rent > 0) {
-          room.collectRent(playerId, prop.ownerId, rent, spaceIndex);
+        // Check for partnership rent
+        const boardSpace = BOARD_SPACES.find(s => s.index === spaceIndex)!;
+        const partnership = boardSpace.colorGroup
+          ? room.getPartnershipForGroup(boardSpace.colorGroup)
+          : undefined;
 
-          io.to(roomCode).emit(EVENTS.PROPERTY_RENT_COLLECTED, {
-            fromId: playerId, toId: prop.ownerId,
-            amount: rent, spaceIndex,
-          } satisfies S_RentCollected);
-
-          // Check if player can still afford to continue
-          if (player.money < 0) {
-            // Player is in debt — they need to raise funds or go bankrupt
-            room.setPendingRent(rent, prop.ownerId);
+        if (partnership) {
+          // Check if lander is a partner (exempt from rent)
+          const isPartner = partnership.partners.some(p => p.playerId === playerId);
+          if (isPartner) {
+            // Partner lands on own zone — exempt
+            room.setPhase('action');
+            broadcastState(io, roomCode);
+          } else {
+            // Non-partner — rent split among partners
+            const rent = room.calculateRent(spaceIndex, room.diceTotal());
+            if (rent > 0) {
+              if (player.money >= rent) {
+                // Can afford — collect immediately
+                const splits = room.collectPartnershipRent(playerId, spaceIndex, rent, partnership);
+                io.to(roomCode).emit(EVENTS.PARTNERSHIP_RENT_SPLIT, {
+                  spaceIndex, fromId: playerId, splits,
+                } satisfies S_PartnershipRentSplit);
+              } else {
+                // Can't afford — enter debt resolution (don't deduct yet)
+                room.setPendingRent(rent, partnership.partners[0].playerId);
+                room.addLog(playerId, 'action', `${player.name} owes £${rent} partnership rent but can't afford it — debt resolution required.`);
+              }
+            }
+            room.setPhase('action');
+            broadcastState(io, roomCode);
           }
+        } else {
+          // Normal rent — single owner
+          const rent = room.calculateRent(spaceIndex, room.diceTotal());
+          if (rent > 0) {
+            if (player.money >= rent) {
+              // Can afford — collect immediately
+              room.collectRent(playerId, prop.ownerId, rent, spaceIndex);
+              io.to(roomCode).emit(EVENTS.PROPERTY_RENT_COLLECTED, {
+                fromId: playerId, toId: prop.ownerId,
+                amount: rent, spaceIndex,
+              } satisfies S_RentCollected);
+            } else {
+              // Can't afford — enter debt resolution (don't deduct yet)
+              room.setPendingRent(rent, prop.ownerId);
+              const ownerName = room.getPlayer(prop.ownerId)?.name ?? '?';
+              room.addLog(playerId, 'action', `${player.name} owes £${rent} rent to ${ownerName} but can't afford it — debt resolution required.`);
+            }
+          }
+          room.setPhase('action');
+          broadcastState(io, roomCode);
         }
-        room.setPhase('action');
-        broadcastState(io, roomCode);
       } else {
         // Own property or mortgaged — nothing happens
         room.setPhase('action');
@@ -529,9 +635,20 @@ function handleLanding(
       break;
     }
 
+    case 'free-parking': {
+      const poolAmount = room.collectFreeParking(playerId);
+      if (poolAmount > 0) {
+        io.to(roomCode).emit(EVENTS.FREE_PARKING_COLLECTED, {
+          playerId, amount: poolAmount,
+        } satisfies S_FreeParkingCollected);
+      }
+      room.setPhase('action');
+      broadcastState(io, roomCode);
+      break;
+    }
+
     case 'go':
     case 'jail':
-    case 'free-parking':
     default: {
       // Nothing happens on these spaces
       room.setPhase('action');
@@ -610,10 +727,16 @@ function applyCardEffect(
 
     case 'money': {
       const amount = effect.value!;
-      const desc = amount >= 0
-        ? `${player.name} collected £${amount}.`
-        : `${player.name} paid £${Math.abs(amount)}.`;
-      room.adjustMoney(playerId, amount, desc);
+      if (amount >= 0) {
+        // Card gives money → goes to Free Parking pool instead of player
+        room.addToFreeParking(amount);
+        room.addLog(playerId, 'card', `${player.name}'s £${amount} went to the Free Parking pool.`);
+      } else {
+        // Card takes money → deduct from player AND add to pool
+        const absAmount = Math.abs(amount);
+        room.adjustMoney(playerId, amount, `${player.name} paid £${absAmount}.`);
+        room.addToFreeParking(absAmount);
+      }
       room.clearPendingCard();
       room.setPhase('action');
       broadcastState(io, roomCode);
@@ -623,6 +746,7 @@ function applyCardEffect(
     case 'money-per-building': {
       const cost = room.calculateBuildingCost(playerId, effect.perHouse!, effect.perHotel!);
       room.adjustMoney(playerId, -cost, `${player.name} paid £${cost} for building repairs.`);
+      room.addToFreeParking(cost);
       room.clearPendingCard();
       room.setPhase('action');
       broadcastState(io, roomCode);

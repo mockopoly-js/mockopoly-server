@@ -1,4 +1,4 @@
-import type { GameState, Player, TradeOffer, DrawnCard, CardEffect, AuctionState, SpaceType, TokenType } from './GameState';
+import type { GameState, Player, TradeOffer, DrawnCard, CardEffect, AuctionState, SpaceType, TokenType, Partnership, PartnershipProposal, PartnershipDissolutionRequest, PartnershipEquity, RentDeal, ColorGroup } from './GameState';
 
 // ─── Event Name Constants ─────────────────────────────────────────────────────
 
@@ -90,6 +90,46 @@ export const EVENTS = {
   BANKRUPTCY_TRANSFER_ASSETS: 'bankruptcy:transfer-assets',
   PLAYER_BANKRUPT:            'player:bankrupt',
 
+  // Partnership
+  PARTNERSHIP_PROPOSE:            'partnership:propose',
+  PARTNERSHIP_ACCEPT_PROPOSAL:    'partnership:accept-proposal',
+  PARTNERSHIP_REJECT_PROPOSAL:    'partnership:reject-proposal',
+  PARTNERSHIP_CANCEL_PROPOSAL:    'partnership:cancel-proposal',
+  PARTNERSHIP_PROPOSED:           'partnership:proposed',
+  PARTNERSHIP_PROPOSAL_ACCEPTED:  'partnership:proposal-accepted',
+  PARTNERSHIP_PROPOSAL_REJECTED:  'partnership:proposal-rejected',
+  PARTNERSHIP_PROPOSAL_CANCELLED: 'partnership:proposal-cancelled',
+  PARTNERSHIP_FORMED:             'partnership:formed',
+  PARTNERSHIP_DISSOLVE_REQUEST:   'partnership:dissolve-request',
+  PARTNERSHIP_ACCEPT_DISSOLVE:    'partnership:accept-dissolve',
+  PARTNERSHIP_REJECT_DISSOLVE:    'partnership:reject-dissolve',
+  PARTNERSHIP_DISSOLVE_REQUESTED: 'partnership:dissolve-requested',
+  PARTNERSHIP_DISSOLVE_ACCEPTED:  'partnership:dissolve-accepted',
+  PARTNERSHIP_DISSOLVE_REJECTED:  'partnership:dissolve-rejected',
+  PARTNERSHIP_DISSOLVED:          'partnership:dissolved',
+  PARTNERSHIP_RENT_SPLIT:         'partnership:rent-split',
+  PARTNERSHIP_BUILD_COST_SPLIT:   'partnership:build-cost-split',
+
+  // Free Parking
+  FREE_PARKING_COLLECTED:  'free-parking:collected',
+
+  // GO Deduction
+  LOAN_GO_DEDUCTION:  'loan:go-deduction',
+  LOAN_GO_DEDUCTED:   'loan:go-deducted',
+
+  // Rent Deal
+  DEAL_OFFER:     'deal:offer',
+  DEAL_COUNTER:   'deal:counter',
+  DEAL_ACCEPT:    'deal:accept',
+  DEAL_REJECT:    'deal:reject',
+  DEAL_CANCEL:    'deal:cancel',
+  DEAL_OFFERED:   'deal:offered',
+  DEAL_COUNTERED: 'deal:countered',
+  DEAL_ACCEPTED:  'deal:accepted',
+  DEAL_REJECTED:  'deal:rejected',
+  DEAL_COMPLETED: 'deal:completed',
+  DEAL_CANCELLED: 'deal:cancelled',
+
   // System
   ERROR:        'error',
   CONNECT_ACK:  'connect-ack',
@@ -111,6 +151,14 @@ export interface C_TradeCounter { tradeId: string; offeredProperties: number[]; 
 export interface C_TradeAction  { tradeId: string }
 export interface C_AuctionBid   { amount: number }
 export interface C_BankruptcyTransfer { toPlayerId: string | null; properties: number[]; money: number }
+export interface C_PartnershipPropose    { colorGroup: ColorGroup; proposedEquity: PartnershipEquity[] }
+export interface C_PartnershipAction     { proposalId: string }
+export interface C_PartnershipDissolve   { partnershipId: string }
+export interface C_PartnershipDissolveAction { dissolutionId: string }
+export interface C_GoDeduction           { count: number }
+export interface C_DealOffer             { creditorIds: string[]; spaceIndex: number; totalRentOwed: number; offeredProperties: number[]; offeredMoney: number; requestedExemption: number }
+export interface C_DealCounter           { dealId: string; offeredProperties: number[]; offeredMoney: number; requestedExemption: number }
+export interface C_DealAction            { dealId: string }
 
 // ─── Server → Client Payloads ─────────────────────────────────────────────────
 
@@ -151,3 +199,30 @@ export interface S_PlayerBankrupt     { playerId: string; creditorId: string | n
 export interface S_GameOver           { winnerId: string; finalStandings: Player[] }
 export interface S_PlayerDisconnected { playerId: string; reconnectWindowSeconds: number }
 export interface S_PlayerReconnected  { playerId: string }
+
+// Partnership
+export interface S_PartnershipProposed          { proposal: PartnershipProposal }
+export interface S_PartnershipProposalAccepted   { proposalId: string; playerId: string }
+export interface S_PartnershipProposalRejected   { proposalId: string; playerId: string }
+export interface S_PartnershipProposalCancelled  { proposalId: string }
+export interface S_PartnershipFormed             { partnership: Partnership }
+export interface S_PartnershipDissolveRequested   { dissolutionId: string; partnershipId: string; requesterId: string }
+export interface S_PartnershipDissolveAccepted    { dissolutionId: string; playerId: string }
+export interface S_PartnershipDissolveRejected    { dissolutionId: string; playerId: string }
+export interface S_PartnershipDissolved           { partnershipId: string; refunds: { playerId: string; amount: number }[] }
+export interface S_PartnershipRentSplit           { spaceIndex: number; fromId: string; splits: { playerId: string; amount: number }[] }
+export interface S_PartnershipBuildCostSplit      { spaceIndex: number; splits: { playerId: string; amount: number }[] }
+
+// Free Parking
+export interface S_FreeParkingCollected  { playerId: string; amount: number }
+
+// GO Deduction
+export interface S_GoDeducted  { playerId: string; count: number; amount: number; totalUsed: number; skipsRemaining: number }
+
+// Rent Deal
+export interface S_DealOffered    { deal: RentDeal }
+export interface S_DealCountered  { deal: RentDeal }
+export interface S_DealAccepted   { dealId: string; playerId: string }
+export interface S_DealRejected   { dealId: string; playerId: string }
+export interface S_DealCompleted  { dealId: string; exemptedAmount: number }
+export interface S_DealCancelled  { dealId: string }
