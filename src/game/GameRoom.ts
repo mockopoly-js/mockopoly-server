@@ -122,7 +122,7 @@ export class GameRoom {
   }
 
   allReady(): boolean {
-    return this.state.players.length >= 2 && this.state.players.every(p => p.isReady);
+    return this.state.players.length >= 1 && this.state.players.every(p => p.isReady); // DEV HACK — was >= 2
   }
 
   isTokenTaken(token: TokenType): boolean {
@@ -153,6 +153,38 @@ export class GameRoom {
       pendingCard: null,
       auctionState: null,
     };
+
+    // DEV HACK — pre-assign properties for testing
+    const testGroup = COLOR_GROUPS['brown']; // [1, 3]
+    for (const idx of testGroup) {
+      const prop = this.state.properties.find(p => p.spaceIndex === idx);
+      if (prop) prop.ownerId = firstPlayer.id;
+      firstPlayer.properties.push(idx);
+    }
+
+    if (this.state.players.length >= 2) {
+      const secondPlayer = this.state.players[1];
+      const orangeGroup = COLOR_GROUPS['orange']; // [16, 18, 19]
+      for (const idx of [orangeGroup[0], orangeGroup[1]]) {
+        const prop = this.state.properties.find(p => p.spaceIndex === idx);
+        if (prop) prop.ownerId = firstPlayer.id;
+        firstPlayer.properties.push(idx);
+      }
+      const lastIdx = orangeGroup[2];
+      const lastProp = this.state.properties.find(p => p.spaceIndex === lastIdx);
+      if (lastProp) lastProp.ownerId = secondPlayer.id;
+      secondPlayer.properties.push(lastIdx);
+
+      // P2 gets dark-blue with 1 house each, P1 money set low for debt testing
+      const darkBlueGroup = COLOR_GROUPS['dark-blue']; // [37, 39]
+      for (const idx of darkBlueGroup) {
+        const prop = this.state.properties.find(p => p.spaceIndex === idx);
+        if (prop) { prop.ownerId = secondPlayer.id; prop.houses = 1; }
+        secondPlayer.properties.push(idx);
+      }
+      firstPlayer.money = 5000000; // £5M — can't afford Mayfair rent
+    }
+    // END DEV HACK
 
     this.addLog(null, 'system', `Game started! ${firstPlayer.name} goes first.`);
     this.touch();
@@ -185,7 +217,7 @@ export class GameRoom {
   movePlayer(playerId: string, spaces: number): { from: number; to: number; passedGo: boolean } {
     const player = this.getPlayer(playerId)!;
     const from = player.position;
-    const to = (from + spaces) % 40;
+    const to = 39; // DEV HACK — was (from + spaces) % 40
     const passedGo = to < from && spaces > 0;
 
     player.position = to;
@@ -688,7 +720,7 @@ export class GameRoom {
     const players = this.activePlayers;
     if (players.length === 0) return this.state.turn.currentPlayerId;
     const currentIdx = players.findIndex(p => p.id === this.state.turn.currentPlayerId);
-    const nextIdx = (currentIdx + 1) % players.length;
+    const nextIdx = currentIdx >= 0 ? currentIdx : 0; // DEV HACK — was (currentIdx + 1) % players.length
     const nextPlayer = players[nextIdx];
 
     this.state.turn = {
