@@ -1,7 +1,7 @@
 // ─── Game Rules ───────────────────────────────────────────────────────────────
 
 export const RULES = {
-  STARTING_MONEY: 999999999, // DEV HACK — was 15000000
+  STARTING_MONEY: 15000000,
   GO_SALARY: 2000000,
   JAIL_FINE: 500000,
   JAIL_SPACE_INDEX: 10,

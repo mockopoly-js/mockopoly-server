@@ -3,7 +3,7 @@ import type {
   GameState, Player, PropertyState, TurnState, GameLogEntry,
   GameLogType, TokenType, DrawnCard, TradeOffer, AuctionState,
   Partnership, PartnershipProposal, PartnershipDissolutionRequest,
-  PartnershipEquity, RentDeal, ColorGroup,
+  PartnershipEquity, RentDeal, ColorGroup, DevHacks,
 } from '../types/GameState';
 import { BOARD_SPACES, PURCHASABLE_SPACES, COLOR_GROUPS } from '../constants/board';
 import { RULES } from '../constants/rules';
@@ -22,6 +22,9 @@ export class GameRoom {
   state: GameState;
   private socketMap: SocketMapping[] = [];
   private cardDecks: CardDecks;
+  private preAssignedProperties: { playerId: string; spaceIndex: number }[] = [];
+  private cardSpaceRotation = 0;
+  private static readonly CARD_SPACES = [2, 7, 17, 22, 33, 36];
 
   constructor(roomCode: string) {
     this.state = {
@@ -45,6 +48,14 @@ export class GameRoom {
         maxPlayers: RULES.MAX_PLAYERS,
         startingMoney: RULES.STARTING_MONEY,
         specialRules: {},
+      },
+      devHacks: {
+        unlimitedMoney: false,
+        soloPlay: false,
+        alwaysLandOnMayfair: false,
+        alwaysLandOnCard: false,
+        sameTurn: false,
+        preAssignProperties: false,
       },
       winnerId: null,
       createdAt: Date.now(),
@@ -122,7 +133,8 @@ export class GameRoom {
   }
 
   allReady(): boolean {
-    return this.state.players.length >= 1 && this.state.players.every(p => p.isReady); // DEV HACK — was >= 2
+    const minPlayers = this.state.devHacks.soloPlay ? 1 : 2;
+    return this.state.players.length >= minPlayers && this.state.players.every(p => p.isReady);
   }
 
   isTokenTaken(token: TokenType): boolean {
@@ -154,37 +166,15 @@ export class GameRoom {
       auctionState: null,
     };
 
-    // DEV HACK — pre-assign properties for testing
-    const testGroup = COLOR_GROUPS['brown']; // [1, 3]
-    for (const idx of testGroup) {
-      const prop = this.state.properties.find(p => p.spaceIndex === idx);
-      if (prop) prop.ownerId = firstPlayer.id;
-      firstPlayer.properties.push(idx);
-    }
-
-    if (this.state.players.length >= 2) {
-      const secondPlayer = this.state.players[1];
-      const orangeGroup = COLOR_GROUPS['orange']; // [16, 18, 19]
-      for (const idx of [orangeGroup[0], orangeGroup[1]]) {
-        const prop = this.state.properties.find(p => p.spaceIndex === idx);
-        if (prop) prop.ownerId = firstPlayer.id;
-        firstPlayer.properties.push(idx);
+    // Apply dev hacks if enabled
+    if (this.state.devHacks.unlimitedMoney) {
+      for (const p of this.state.players) {
+        p.money = 999999999;
       }
-      const lastIdx = orangeGroup[2];
-      const lastProp = this.state.properties.find(p => p.spaceIndex === lastIdx);
-      if (lastProp) lastProp.ownerId = secondPlayer.id;
-      secondPlayer.properties.push(lastIdx);
-
-      // P2 gets dark-blue with 1 house each, P1 money set low for debt testing
-      const darkBlueGroup = COLOR_GROUPS['dark-blue']; // [37, 39]
-      for (const idx of darkBlueGroup) {
-        const prop = this.state.properties.find(p => p.spaceIndex === idx);
-        if (prop) { prop.ownerId = secondPlayer.id; prop.houses = 1; }
-        secondPlayer.properties.push(idx);
-      }
-      firstPlayer.money = 5000000; // £5M — can't afford Mayfair rent
     }
-    // END DEV HACK
+    if (this.state.devHacks.preAssignProperties) {
+      this.applyPreAssignProperties();
+    }
 
     this.addLog(null, 'system', `Game started! ${firstPlayer.name} goes first.`);
     this.touch();
@@ -217,7 +207,15 @@ export class GameRoom {
   movePlayer(playerId: string, spaces: number): { from: number; to: number; passedGo: boolean } {
     const player = this.getPlayer(playerId)!;
     const from = player.position;
-    const to = 39; // DEV HACK — was (from + spaces) % 40
+    let to: number;
+    if (this.state.devHacks.alwaysLandOnCard) {
+      to = GameRoom.CARD_SPACES[this.cardSpaceRotation % GameRoom.CARD_SPACES.length];
+      this.cardSpaceRotation++;
+    } else if (this.state.devHacks.alwaysLandOnMayfair) {
+      to = 39;
+    } else {
+      to = (from + spaces) % 40;
+    }
     const passedGo = to < from && spaces > 0;
 
     player.position = to;
@@ -720,7 +718,9 @@ export class GameRoom {
     const players = this.activePlayers;
     if (players.length === 0) return this.state.turn.currentPlayerId;
     const currentIdx = players.findIndex(p => p.id === this.state.turn.currentPlayerId);
-    const nextIdx = currentIdx >= 0 ? currentIdx : 0; // DEV HACK — was (currentIdx + 1) % players.length
+    const nextIdx = this.state.devHacks.sameTurn
+      ? (currentIdx >= 0 ? currentIdx : 0)
+      : (currentIdx + 1) % players.length;
     const nextPlayer = players[nextIdx];
 
     this.state.turn = {
@@ -751,6 +751,99 @@ export class GameRoom {
     this.state.turn.rentOwnerId = null;
     this.state.turn.pendingCard = null;
     this.touch();
+  }
+
+  // ── Dev Hacks ──────────────────────────────────────────────────────────────
+
+  setDevHack(hack: keyof DevHacks, enabled: boolean): void {
+    this.state.devHacks[hack] = enabled;
+
+    // Apply immediate effects during an active game
+    if (this.state.status === 'in-progress') {
+      if (hack === 'unlimitedMoney') {
+        if (enabled) {
+          for (const p of this.state.players) {
+            if (!p.isBankrupt) p.money = 999999999;
+          }
+        } else {
+          for (const p of this.state.players) {
+            if (!p.isBankrupt) p.money = RULES.STARTING_MONEY;
+          }
+        }
+      }
+
+      if (hack === 'preAssignProperties') {
+        if (enabled) {
+          this.applyPreAssignProperties();
+        } else {
+          this.revertPreAssignProperties();
+        }
+      }
+    }
+
+    this.touch();
+  }
+
+  private applyPreAssignProperties(): void {
+    this.preAssignedProperties = [];
+    const firstPlayer = this.state.players[0];
+    if (!firstPlayer) return;
+
+    const assign = (playerId: string, spaceIndex: number, houses = 0) => {
+      const player = this.getPlayer(playerId)!;
+      const prop = this.state.properties.find(p => p.spaceIndex === spaceIndex);
+      if (prop && !prop.ownerId) {
+        prop.ownerId = playerId;
+        prop.houses = houses;
+        if (!player.properties.includes(spaceIndex)) player.properties.push(spaceIndex);
+        this.preAssignedProperties.push({ playerId, spaceIndex });
+      }
+    };
+
+    // P1 gets brown group
+    for (const idx of COLOR_GROUPS['brown']) assign(firstPlayer.id, idx);
+
+    if (this.state.players.length >= 2) {
+      const secondPlayer = this.state.players[1];
+      const orangeGroup = COLOR_GROUPS['orange'];
+
+      // P1 gets first 2 orange
+      assign(firstPlayer.id, orangeGroup[0]);
+      assign(firstPlayer.id, orangeGroup[1]);
+
+      // P2 gets last orange
+      assign(secondPlayer.id, orangeGroup[2]);
+
+      // P2 gets dark-blue with 1 house each
+      for (const idx of COLOR_GROUPS['dark-blue']) assign(secondPlayer.id, idx, 1);
+
+      // P1 money set low for debt testing
+      firstPlayer.money = 5000000;
+    }
+  }
+
+  private revertPreAssignProperties(): void {
+    for (const { playerId, spaceIndex } of this.preAssignedProperties) {
+      const prop = this.state.properties.find(p => p.spaceIndex === spaceIndex);
+      if (prop && prop.ownerId === playerId) {
+        prop.ownerId = null;
+        prop.houses = 0;
+        prop.hasHotel = false;
+        prop.isMortgaged = false;
+      }
+      const player = this.getPlayer(playerId);
+      if (player) {
+        player.properties = player.properties.filter(idx => idx !== spaceIndex);
+      }
+    }
+
+    // Restore P1 money if it was reduced
+    const firstPlayer = this.state.players[0];
+    if (firstPlayer && !firstPlayer.isBankrupt) {
+      firstPlayer.money = this.state.devHacks.unlimitedMoney ? 999999999 : RULES.STARTING_MONEY;
+    }
+
+    this.preAssignedProperties = [];
   }
 
   // ── Bankruptcy ──────────────────────────────────────────────────────────────

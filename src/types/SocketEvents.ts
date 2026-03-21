@@ -1,4 +1,4 @@
-import type { GameState, Player, TradeOffer, DrawnCard, CardEffect, AuctionState, SpaceType, TokenType, Partnership, PartnershipProposal, PartnershipDissolutionRequest, PartnershipEquity, RentDeal, ColorGroup } from './GameState';
+import type { GameState, Player, TradeOffer, DrawnCard, CardEffect, AuctionState, SpaceType, TokenType, Partnership, PartnershipProposal, PartnershipDissolutionRequest, PartnershipEquity, RentDeal, ColorGroup, DevHacks } from './GameState';
 
 // ─── Event Name Constants ─────────────────────────────────────────────────────
 
@@ -130,6 +130,10 @@ export const EVENTS = {
   DEAL_COMPLETED: 'deal:completed',
   DEAL_CANCELLED: 'deal:cancelled',
 
+  // Dev Hacks
+  DEV_SET_HACK:      'dev:set-hack',
+  DEV_HACKS_UPDATED: 'dev:hacks-updated',
+
   // System
   ERROR:        'error',
   CONNECT_ACK:  'connect-ack',
@@ -159,6 +163,7 @@ export interface C_GoDeduction           { count: number }
 export interface C_DealOffer             { creditorIds: string[]; spaceIndex: number; totalRentOwed: number; offeredProperties: number[]; offeredMoney: number; requestedExemption: number }
 export interface C_DealCounter           { dealId: string; offeredProperties: number[]; offeredMoney: number; requestedExemption: number }
 export interface C_DealAction            { dealId: string }
+export interface C_DevSetHack            { hack: keyof DevHacks; enabled: boolean }
 
 // ─── Server → Client Payloads ─────────────────────────────────────────────────
 
@@ -226,3 +231,6 @@ export interface S_DealAccepted   { dealId: string; playerId: string }
 export interface S_DealRejected   { dealId: string; playerId: string }
 export interface S_DealCompleted  { dealId: string; exemptedAmount: number }
 export interface S_DealCancelled  { dealId: string }
+
+// Dev Hacks
+export interface S_DevHacksUpdated  { devHacks: DevHacks }
