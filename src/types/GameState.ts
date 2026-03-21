@@ -240,6 +240,17 @@ export interface GameConfig {
   specialRules: Record<string, boolean>;
 }
 
+// ─── Dev Hacks ───────────────────────────────────────────────────────────────
+
+export interface DevHacks {
+  unlimitedMoney: boolean;          // Starting money = 999M
+  soloPlay: boolean;                // Allow 1-player game start
+  alwaysLandOnMayfair: boolean;     // Override move → always land on position 39
+  alwaysLandOnCard: boolean;        // Override move → cycle through Chance/Community Chest spaces
+  sameTurn: boolean;                // Never advance turn to next player
+  preAssignProperties: boolean;     // Pre-assign test properties on game start
+}
+
 // ─── Master Game State ────────────────────────────────────────────────────────
 
 export interface GameState {
@@ -260,6 +271,7 @@ export interface GameState {
   activeRentDeal: RentDeal | null;
   log: GameLogEntry[];
   config: GameConfig;
+  devHacks: DevHacks;
   winnerId: string | null;
   createdAt: number;
   lastActionAt: number;
