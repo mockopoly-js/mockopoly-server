@@ -180,6 +180,7 @@ export interface Player {
   id: string;
   name: string;
   token: TokenType;
+  character?: string;         // optional client-chosen character id/name (cosmetic)
   position: number;           // 0–39 board space index
   money: number;
   properties: number[];       // owned space indices
