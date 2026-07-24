@@ -181,6 +181,7 @@ export interface Player {
   name: string;
   token: TokenType;
   character?: string;         // optional client-chosen character id/name (cosmetic)
+  characterColor?: string;    // optional client-chosen character base colour hex (cosmetic)
   position: number;           // 0–39 board space index
   money: number;
   properties: number[];       // owned space indices

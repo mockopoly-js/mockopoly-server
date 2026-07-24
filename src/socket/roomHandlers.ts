@@ -20,14 +20,14 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
   // ── Create Room ─────────────────────────────────────────────────────────────
 
   socket.on(EVENTS.ROOM_CREATE, (data: C_RoomCreate) => {
-    const { playerName, token, character } = data;
+    const { playerName, token, character, characterColor } = data;
 
     // Validate
     if (!playerName || playerName.trim().length === 0) {
       return socket.emit(EVENTS.ERROR, { code: 'INVALID_NAME', message: 'Player name is required.' } satisfies S_Error);
     }
 
-    const room = gameManager.createRoom(socket.id, playerName.trim(), token, character);
+    const room = gameManager.createRoom(socket.id, playerName.trim(), token, character, characterColor);
     const player = room.getPlayerBySocketId(socket.id)!;
 
     // Join the Socket.io room
@@ -48,7 +48,7 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
   // ── Join Room ───────────────────────────────────────────────────────────────
 
   socket.on(EVENTS.ROOM_JOIN, (data: C_RoomJoin) => {
-    const { roomCode, playerName, token, character, reconnectToken } = data;
+    const { roomCode, playerName, token, character, characterColor, reconnectToken } = data;
 
     const room = gameManager.getRoom(roomCode.toUpperCase());
     if (!room) {
@@ -91,7 +91,7 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
 
     const playerId = uuid();
     const reconnect = uuid();
-    const player = room.addPlayer(playerId, socket.id, playerName.trim(), token, reconnect, false, character);
+    const player = room.addPlayer(playerId, socket.id, playerName.trim(), token, reconnect, false, character, characterColor);
 
     socket.join(roomCode);
     (socket as any).playerId = playerId;
