@@ -10,13 +10,13 @@ export class GameManager {
 
   // ── Room lifecycle ──────────────────────────────────────────────────────────
 
-  createRoom(hostSocketId: string, playerName: string, token: TokenType, character?: string): GameRoom {
+  createRoom(hostSocketId: string, playerName: string, token: TokenType, character?: string, characterColor?: string): GameRoom {
     const roomCode = this.generateRoomCode();
     const playerId = uuid();
     const reconnectToken = uuid();
 
     const room = new GameRoom(roomCode);
-    room.addPlayer(playerId, hostSocketId, playerName, token, reconnectToken, true, character);
+    room.addPlayer(playerId, hostSocketId, playerName, token, reconnectToken, true, character, characterColor);
 
     this.rooms.set(roomCode, room);
     return room;

@@ -70,9 +70,10 @@ export class GameRoom {
     playerId: string, socketId: string, name: string,
     token: TokenType, reconnectToken: string, isHost: boolean,
     character?: string,
+    characterColor?: string,
   ): Player {
     const player: Player = {
-      id: playerId, name, token, character,
+      id: playerId, name, token, character, characterColor,
       position: 0, money: this.state.config.startingMoney,
       properties: [], isJailed: false, jailTurns: 0, jailCardCount: 0,
       isBankrupt: false, isConnected: true, isHost, isReady: false,
