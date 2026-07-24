@@ -69,9 +69,10 @@ export class GameRoom {
   addPlayer(
     playerId: string, socketId: string, name: string,
     token: TokenType, reconnectToken: string, isHost: boolean,
+    character?: string,
   ): Player {
     const player: Player = {
-      id: playerId, name, token,
+      id: playerId, name, token, character,
       position: 0, money: this.state.config.startingMoney,
       properties: [], isJailed: false, jailTurns: 0, jailCardCount: 0,
       isBankrupt: false, isConnected: true, isHost, isReady: false,
