@@ -10,6 +10,7 @@ import type {
 import type { RentDeal } from '../types/GameState';
 import { gameManager } from '../game/GameManager';
 import { GameEngine } from '../game/GameEngine';
+import { emitRentSettlement } from './gameHandlers';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -57,11 +58,16 @@ export function registerDealHandlers(io: Server, socket: Socket): void {
       skipsRemaining: player.goSkipsRemaining,
     } satisfies S_GoDeducted);
 
-    // If player can now afford pending rent, auto-collect it
-    const turn = room.state.turn;
-    if (turn.mustPayRent && turn.rentAmount && turn.rentOwnerId && player.money >= turn.rentAmount) {
-      room.collectRent(playerId, turn.rentOwnerId, turn.rentAmount, player.position);
-      room.clearPendingRent();
+    // A GO deduction is only legal while in debt (canGoDeduction), so its whole
+    // purpose is covering the rent — auto-settle the moment it is covered.
+    //
+    // This used to pay `turn.rentOwnerId` directly, which for a partnership is
+    // only `partners[0]` and handed one partner the entire rent; it also moved
+    // money without emitting anything, so no client listener ever fired. Both
+    // are fixed by going through the shared settlement path.
+    if (GameEngine.canSettleRentDebt(room, playerId, []) === null) {
+      const settlement = room.settleRentDebt(playerId, []);
+      emitRentSettlement(io, roomCode, playerId, settlement);
     }
 
     broadcastState(io, roomCode);

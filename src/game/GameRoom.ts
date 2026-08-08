@@ -16,6 +16,35 @@ interface SocketMapping {
   socketId: string;
 }
 
+/**
+ * Server-only bookkeeping for an unpayable rent, captured at the moment of
+ * landing. `TurnState.rentOwnerId` collapses a partnership down to a single id
+ * (`partners[0]`), which loses the split — this remembers enough to rebuild it
+ * later without widening the shared GameState contract.
+ */
+interface PendingRentContext {
+  /** The space the rent was incurred on. Not re-read off `player.position`. */
+  spaceIndex: number;
+  /** Set when the rent was owed to a partnership rather than a single owner. */
+  partnershipId: string | null;
+}
+
+/** What a settled rent debt actually moved — the socket layer turns this into events. */
+export interface RentSettlement {
+  spaceIndex: number;
+  /** The debt that was outstanding, before any deeds were credited against it. */
+  totalRent: number;
+  /** Face value of the deeds handed over, capped at nothing — excess is forfeited. */
+  deedCredit: number;
+  /** Cash that actually changed hands: `max(0, totalRent - deedCredit)`. */
+  cashPaid: number;
+  transferred: number[];
+  /** Set when the debt was owed to a single owner. */
+  creditorId: string | null;
+  /** Set when the debt was owed to a partnership — same shape as `collectPartnershipRent`. */
+  splits: { playerId: string; amount: number }[] | null;
+}
+
 // ─── GameRoom ────────────────────────────────────────────────────────────────
 
 export class GameRoom {
@@ -24,6 +53,7 @@ export class GameRoom {
   private cardDecks: CardDecks;
   private preAssignedProperties: { playerId: string; spaceIndex: number }[] = [];
   private cardSpaceRotation = 0;
+  private pendingRentContext: PendingRentContext | null = null;
   private static readonly CARD_SPACES = [2, 7, 17, 22, 33, 36];
 
   constructor(roomCode: string) {
@@ -155,6 +185,7 @@ export class GameRoom {
 
     // First player goes first
     const firstPlayer = this.state.players[0];
+    this.pendingRentContext = null;
     this.state.turn = {
       currentPlayerId: firstPlayer.id,
       phase: 'waiting',
@@ -347,10 +378,19 @@ export class GameRoom {
     this.touch();
   }
 
-  setPendingRent(amount: number, ownerId: string): void {
+  /**
+   * Record a rent the lander could not afford at the moment of landing.
+   *
+   * `spaceIndex` and `partnershipId` are held server-side (see
+   * PendingRentContext) so that settling later can pay the *correct* creditor:
+   * `ownerId` for a partnership is only `partners[0]`, and paying that id alone
+   * would hand one partner the whole rent.
+   */
+  setPendingRent(amount: number, ownerId: string, spaceIndex: number, partnershipId: string | null): void {
     this.state.turn.mustPayRent = true;
     this.state.turn.rentAmount = amount;
     this.state.turn.rentOwnerId = ownerId;
+    this.pendingRentContext = { spaceIndex, partnershipId };
     this.touch();
   }
 
@@ -358,7 +398,121 @@ export class GameRoom {
     this.state.turn.mustPayRent = false;
     this.state.turn.rentAmount = null;
     this.state.turn.rentOwnerId = null;
+    this.pendingRentContext = null;
     this.touch();
+  }
+
+  /**
+   * What handing this deed to the creditor is worth against a debt.
+   *
+   * Pure — no mutation. Lives here rather than in GameEngine because it reads
+   * property state (cf. `calculateRent`, `calculateBuildingCost`) and because
+   * the validator and the mutator MUST agree on the number to the penny; both
+   * call this one function.
+   */
+  deedSettlementValue(spaceIndex: number): number {
+    const space = BOARD_SPACES.find(s => s.index === spaceIndex);
+    const prop = this.getPropertyState(spaceIndex);
+    if (!space || !prop) return 0;
+    return prop.isMortgaged ? (space.mortgageValue ?? 0) : (space.price ?? 0);
+  }
+
+  /**
+   * Pay off a pending rent, optionally handing deeds over in lieu of cash.
+   *
+   * Assumes `GameEngine.canSettleRentDebt` has already passed. The creditor is
+   * re-derived from live server state here and never taken from the caller.
+   */
+  settleRentDebt(playerId: string, properties: number[]): RentSettlement {
+    const debtor = this.getPlayer(playerId)!;
+    const ctx = this.pendingRentContext;
+    const spaceIndex = ctx ? ctx.spaceIndex : debtor.position;
+    const totalRent = this.state.turn.rentAmount ?? 0;
+
+    // Rebuild the partnership from the id captured at landing, so a group that
+    // has since been dissolved falls back to the deed's current owner rather
+    // than silently paying a partnership that no longer exists. Percentages are
+    // read LIVE, not frozen, so a mid-debt restructure (handlePartnerBankruptcy)
+    // is respected.
+    const partnership = ctx && ctx.partnershipId
+      ? this.state.partnerships.find(p => p.partnershipId === ctx.partnershipId && p.status === 'active')
+      : undefined;
+
+    // Deeds go to the majority partner — the same tie-break handlePartnerBankruptcy
+    // uses when a partnership inherits property.
+    const deedRecipientId = partnership
+      ? [...partnership.partners].sort((a, b) => b.percentage - a.percentage)[0].playerId
+      : this.resolveRentCreditorId(spaceIndex);
+
+    let deedCredit = 0;
+    const transferred: number[] = [];
+    for (const idx of properties) {
+      deedCredit += this.transferDeed(playerId, idx, deedRecipientId);
+      transferred.push(idx);
+    }
+
+    // Deeds worth more than the debt do NOT generate change — the debtor chose
+    // to over-pay, which mirrors the client's own `max(0, debt - transferValue)`.
+    const cashPaid = Math.max(0, totalRent - deedCredit);
+
+    let creditorId: string | null = null;
+    let splits: { playerId: string; amount: number }[] | null = null;
+
+    if (cashPaid > 0) {
+      if (partnership) {
+        splits = this.collectPartnershipRent(playerId, spaceIndex, cashPaid, partnership);
+      } else if (deedRecipientId) {
+        creditorId = deedRecipientId;
+        this.collectRent(playerId, deedRecipientId, cashPaid, spaceIndex);
+      } else {
+        // The creditor left the game between landing and settling. The money
+        // still leaves the debtor — it goes where tax money goes.
+        debtor.money -= cashPaid;
+        this.addToFreeParking(cashPaid);
+        this.addLog(playerId, 'action', `${debtor.name} paid £${cashPaid} of owed rent into the Free Parking pool (the creditor is no longer in the game).`);
+      }
+    } else if (totalRent > 0) {
+      this.addLog(playerId, 'action', `${debtor.name} settled £${totalRent} of rent entirely with property.`);
+    }
+
+    this.clearPendingRent();
+    this.touch();
+
+    return { spaceIndex, totalRent, deedCredit, cashPaid, transferred, creditorId, splits };
+  }
+
+  /** The player who should receive rent for `spaceIndex`, or null if nobody can. */
+  private resolveRentCreditorId(spaceIndex: number): string | null {
+    const ownerId = this.getPropertyState(spaceIndex)?.ownerId ?? this.state.turn.rentOwnerId;
+    if (!ownerId) return null;
+    const owner = this.getPlayer(ownerId);
+    return owner && !owner.isBankrupt ? owner.id : null;
+  }
+
+  /** Move one deed from debtor to creditor (or back to the bank). Returns its settlement value. */
+  private transferDeed(fromId: string, spaceIndex: number, toId: string | null): number {
+    const space = BOARD_SPACES.find(s => s.index === spaceIndex)!;
+    const prop = this.getPropertyState(spaceIndex)!;
+    const from = this.getPlayer(fromId)!;
+    const value = this.deedSettlementValue(spaceIndex);
+
+    from.properties = from.properties.filter(i => i !== spaceIndex);
+
+    const to = toId ? this.getPlayer(toId) : undefined;
+    if (to) {
+      to.properties.push(spaceIndex);
+      prop.ownerId = to.id;
+      this.addLog(fromId, 'action', `${from.name} handed ${space.name} to ${to.name} to settle rent.`);
+    } else {
+      // Same treatment declareBankruptcy gives assets with no creditor.
+      prop.ownerId = null;
+      prop.houses = 0;
+      prop.hasHotel = false;
+      prop.isMortgaged = false;
+      this.addLog(fromId, 'action', `${from.name} surrendered ${space.name} to the bank to settle rent.`);
+    }
+
+    return value;
   }
 
   // ── Houses & Hotels ─────────────────────────────────────────────────────────
@@ -725,6 +879,7 @@ export class GameRoom {
       : (currentIdx + 1) % players.length;
     const nextPlayer = players[nextIdx];
 
+    this.pendingRentContext = null;
     this.state.turn = {
       currentPlayerId: nextPlayer.id,
       phase: 'waiting',
@@ -752,6 +907,7 @@ export class GameRoom {
     this.state.turn.rentAmount = null;
     this.state.turn.rentOwnerId = null;
     this.state.turn.pendingCard = null;
+    this.pendingRentContext = null;
     this.touch();
   }
 

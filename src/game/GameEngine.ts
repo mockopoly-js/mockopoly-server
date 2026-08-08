@@ -265,6 +265,68 @@ export class GameEngine {
     return null;
   }
 
+  // ── Debt settlement guards ──────────────────────────────────────────────────
+
+  /**
+   * What a proposed settlement is worth, in server terms.
+   *
+   * `deedCredit` is the face value of the deeds being handed over (mortgage
+   * value if mortgaged, list price otherwise) and `cashOwed` is what is left to
+   * find in cash. Pure — the caller decides what to do with the numbers.
+   */
+  static quoteRentSettlement(
+    room: GameRoom, properties: number[],
+  ): { totalRent: number; deedCredit: number; cashOwed: number } {
+    const totalRent = room.state.turn.rentAmount ?? 0;
+    let deedCredit = 0;
+    for (const idx of properties) deedCredit += room.deedSettlementValue(idx);
+    return { totalRent, deedCredit, cashOwed: Math.max(0, totalRent - deedCredit) };
+  }
+
+  /**
+   * Can this player pay off the rent they could not afford when they landed?
+   *
+   * This is the exit from `turn.mustPayRent`, which `canEndTurn` otherwise
+   * blocks on forever. `properties` are deeds offered in lieu of cash and may
+   * be empty, which is the plain "I have raised the money, take it" case.
+   */
+  static canSettleRentDebt(room: GameRoom, playerId: string, properties: number[]): string | null {
+    if (room.state.status !== 'in-progress') return 'Game is not in progress.';
+    if (!this.isCurrentPlayer(room, playerId)) return 'It is not your turn.';
+
+    const player = room.getPlayer(playerId);
+    if (!player) return 'Player not found.';
+    if (player.isBankrupt) return 'You are bankrupt.';
+
+    if (!room.state.turn.mustPayRent) return 'You have no outstanding debt to settle.';
+    const totalRent = room.state.turn.rentAmount;
+    if (totalRent === null || totalRent <= 0) return 'You have no outstanding debt to settle.';
+
+    // Mirrors canEndTurn: a live negotiation owns the debt until it resolves,
+    // otherwise an accepted exemption could be applied to a debt already paid.
+    if (room.state.activeRentDeal) return 'A rent deal is still in progress.';
+
+    const seen = new Set<number>();
+    for (const idx of properties) {
+      if (!Number.isInteger(idx)) return 'Invalid property index.';
+      if (seen.has(idx)) return `Property at space ${idx} is listed more than once.`;
+      seen.add(idx);
+
+      const prop = room.getPropertyState(idx);
+      if (!prop) return `Property at space ${idx} not found.`;
+      if (prop.ownerId !== playerId || !player.properties.includes(idx)) {
+        return `You do not own property at space ${idx}.`;
+      }
+      if (prop.houses > 0 || prop.hasHotel) return 'Cannot hand over properties with buildings. Sell the buildings first.';
+      if (room.isPropertyInPartnership(idx)) return 'Cannot hand over properties in an active partnership.';
+    }
+
+    const { cashOwed } = this.quoteRentSettlement(room, properties);
+    if (player.money < cashOwed) return `You cannot cover the remaining £${cashOwed} of the debt.`;
+
+    return null;
+  }
+
   // ── Bankruptcy check ────────────────────────────────────────────────────────
 
   /** Check if player can raise funds (has properties to mortgage or buildings to sell) */

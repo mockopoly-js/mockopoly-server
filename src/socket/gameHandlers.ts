@@ -2,7 +2,7 @@ import type { Server, Socket } from 'socket.io';
 import { EVENTS } from '../types/SocketEvents';
 import type {
   C_BuildHouse, C_BuildHotel, C_SellHouse, C_SellHotel,
-  C_MortgageApply, C_MortgageLift, C_AuctionBid,
+  C_MortgageApply, C_MortgageLift, C_AuctionBid, C_BankruptcyTransfer,
   S_StateUpdate, S_DiceRolled, S_PlayerMoved, S_Landed,
   S_TurnStarted, S_TurnEnded, S_CardDrawn, S_CardEffect,
   S_JailSent, S_JailReleased, S_PropertyBought, S_RentCollected,
@@ -13,6 +13,7 @@ import type {
   S_FreeParkingCollected, S_PartnershipRentSplit, S_PartnershipBuildCostSplit,
 } from '../types/SocketEvents';
 import { gameManager } from '../game/GameManager';
+import type { RentSettlement } from '../game/GameRoom';
 import { GameEngine } from '../game/GameEngine';
 import { BOARD_SPACES } from '../constants/board';
 import { RULES } from '../constants/rules';
@@ -36,6 +37,35 @@ function broadcastState(io: Server, roomCode: string): void {
   const room = gameManager.getRoom(roomCode);
   if (!room) return;
   io.to(roomCode).emit(EVENTS.GAME_STATE_UPDATE, { state: room.state } satisfies S_StateUpdate);
+}
+
+/**
+ * Announce a settled rent debt using the SAME two events the immediate
+ * collection path in `handleLanding` emits, so the client's existing listeners
+ * work unchanged and never learn that the money arrived late.
+ *
+ * Exported because `dealHandlers` settles the same debt off a GO deduction and
+ * must not grow a second, divergent copy of this.
+ *
+ * `amount` is the cash that actually moved, so a debt cleared entirely with
+ * deeds emits nothing here — a "you paid £0" toast would be a lie. The deed
+ * transfer itself rides the GAME_STATE_UPDATE that follows.
+ */
+export function emitRentSettlement(
+  io: Server, roomCode: string, playerId: string, settlement: RentSettlement,
+): void {
+  if (settlement.cashPaid <= 0) return;
+
+  if (settlement.splits) {
+    io.to(roomCode).emit(EVENTS.PARTNERSHIP_RENT_SPLIT, {
+      spaceIndex: settlement.spaceIndex, fromId: playerId, splits: settlement.splits,
+    } satisfies S_PartnershipRentSplit);
+  } else if (settlement.creditorId) {
+    io.to(roomCode).emit(EVENTS.PROPERTY_RENT_COLLECTED, {
+      fromId: playerId, toId: settlement.creditorId,
+      amount: settlement.cashPaid, spaceIndex: settlement.spaceIndex,
+    } satisfies S_RentCollected);
+  }
 }
 
 function checkGameOver(io: Server, room: ReturnType<typeof gameManager.getRoom>, roomCode: string): boolean {
@@ -478,6 +508,40 @@ export function registerGameHandlers(io: Server, socket: Socket): void {
     broadcastState(io, roomCode);
   });
 
+  // ── Debt Settlement ─────────────────────────────────────────────────────────
+
+  /**
+   * Pay off a rent the player could not afford when they landed.
+   *
+   * DESPITE THE NAME, THIS IS NOT A BANKRUPTCY. It is the survival path, and
+   * the only exit from `turn.mustPayRent` other than declaring: the client
+   * sells buildings and mortgages first (BUILD_SELL_* / MORTGAGE_APPLY), then
+   * sends this as the final leg. `properties` are deeds offered in lieu of
+   * cash and may be empty, which is the plain "I raised the money" case.
+   *
+   * The debtor stays in the game — a settlement that cannot cover the debt is
+   * rejected outright rather than silently escalated to bankruptcy, because
+   * BANKRUPTCY_DECLARE is a separate, deliberately-armed action.
+   */
+  socket.on(EVENTS.BANKRUPTCY_TRANSFER_ASSETS, (data: C_BankruptcyTransfer) => {
+    const ctx = getContext(socket);
+    if (!ctx) return;
+    const { roomCode, playerId, room } = ctx;
+
+    const properties = Array.isArray(data?.properties) ? data.properties : [];
+
+    const err = GameEngine.canSettleRentDebt(room, playerId, properties);
+    if (err) return emitError(socket, err);
+
+    // `data.toPlayerId` and `data.money` are advisory only. The creditor (and
+    // for a partnership, the full split) and the cash leg are re-derived from
+    // server state inside settleRentDebt.
+    const settlement = room.settleRentDebt(playerId, properties);
+
+    emitRentSettlement(io, roomCode, playerId, settlement);
+    broadcastState(io, roomCode);
+  });
+
   // ── Bankruptcy ──────────────────────────────────────────────────────────────
 
   socket.on(EVENTS.BANKRUPTCY_DECLARE, () => {
@@ -566,7 +630,9 @@ function handleLanding(
                 } satisfies S_PartnershipRentSplit);
               } else {
                 // Can't afford — enter debt resolution (don't deduct yet)
-                room.setPendingRent(rent, partnership.partners[0].playerId);
+                // rentOwnerId can only hold one id, so it holds partners[0] and
+                // the room keeps the partnership id server-side for settlement.
+                room.setPendingRent(rent, partnership.partners[0].playerId, spaceIndex, partnership.partnershipId);
                 room.addLog(playerId, 'action', `${player.name} owes £${rent} partnership rent but can't afford it — debt resolution required.`);
               }
             }
@@ -586,7 +652,7 @@ function handleLanding(
               } satisfies S_RentCollected);
             } else {
               // Can't afford — enter debt resolution (don't deduct yet)
-              room.setPendingRent(rent, prop.ownerId);
+              room.setPendingRent(rent, prop.ownerId, spaceIndex, null);
               const ownerName = room.getPlayer(prop.ownerId)?.name ?? '?';
               room.addLog(playerId, 'action', `${player.name} owes £${rent} rent to ${ownerName} but can't afford it — debt resolution required.`);
             }
