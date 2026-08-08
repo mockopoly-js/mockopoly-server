@@ -12,7 +12,7 @@ export const BOARD_SPACES: BoardSpace[] = [
   { index: 1,  type: 'property',      name: 'Old Kent Road',        price: 600000,  colorGroup: 'brown',     cardFrame: 0,  rents: [20000,100000,300000,900000,1600000,2500000],    houseCost: 500000,  mortgageValue: 300000 },
   { index: 2,  type: 'community-chest', name: 'Community Chest' },
   { index: 3,  type: 'property',      name: 'Whitechapel Road',     price: 600000,  colorGroup: 'brown',     cardFrame: 1,  rents: [40000,200000,600000,1800000,3200000,4500000],    houseCost: 500000,  mortgageValue: 300000 },
-  { index: 4,  type: 'tax',           name: 'Income Tax',           taxAmount: 1500000 },
+  { index: 4,  type: 'tax',           name: 'Income Tax',           taxAmount: 2000000 },
   { index: 5,  type: 'railroad',      name: 'Kings Cross Station',  price: 2000000, colorGroup: 'railroad',  cardFrame: 2,  railroadRents: [250000,500000,1000000,2000000],  mortgageValue: 1000000 },
   { index: 6,  type: 'property',      name: 'The Angle Islington',  price: 1000000, colorGroup: 'light-blue',cardFrame: 3,  rents: [60000,300000,900000,2700000,4000000,5500000],    houseCost: 500000,  mortgageValue: 500000 },
   { index: 7,  type: 'chance',        name: 'Chance' },
@@ -90,7 +90,7 @@ export const COMMUNITY_CHEST_CARDS: GameCard[] = [
   { id: 8,  deck: 'community-chest', description: 'It is your birthday — collect £100K from every player.',                   effect: { type: 'money-from-players', value: 100000 } },
   { id: 9,  deck: 'community-chest', description: 'Life insurance matures — collect £1M.',                                    effect: { type: 'money', value: 1000000 } },
   { id: 10, deck: 'community-chest', description: 'Pay hospital fees — pay £1M.',                                             effect: { type: 'money', value: -1000000 } },
-  { id: 11, deck: 'community-chest', description: 'Pay school fees — pay £1.5M.',                                             effect: { type: 'money', value: -1500000 } },
+  { id: 11, deck: 'community-chest', description: 'Pay school fees — pay £500K.',                                             effect: { type: 'money', value: -500000 } },
   { id: 12, deck: 'community-chest', description: 'Receive £250K consultancy fee.',                                           effect: { type: 'money', value: 250000 } },
   { id: 13, deck: 'community-chest', description: 'You are assessed for street repairs — pay £400K per house, £1.15M per hotel.',effect: { type: 'money-per-building', perHouse: 400000, perHotel: 1150000 } },
   { id: 14, deck: 'community-chest', description: 'You have won second prize in a beauty contest — collect £100K.',           effect: { type: 'money', value: 100000 } },
@@ -115,7 +115,8 @@ export const CHANCE_CARDS: GameCard[] = [
   { id: 12, deck: 'chance', description: 'Take a trip to Kings Cross Station — if you pass Go collect £2M.',                    effect: { type: 'advance-to', value: 5 } },
   { id: 13, deck: 'chance', description: 'You have been elected Chairman of the Board — pay each player £500K.',                effect: { type: 'money-from-players', value: -500000 } },
   { id: 14, deck: 'chance', description: 'Your building loan matures — collect £1.5M.',                                         effect: { type: 'money', value: 1500000 } },
-  { id: 15, deck: 'chance', description: 'You are assessed for street repairs — pay £40K per house, £115K per hotel.',           effect: { type: 'money-per-building', perHouse: 40000, perHotel: 115000 } },
+  // Crossword competition — restores missing standard Chance card
+  { id: 15, deck: 'chance', description: 'You have won a crossword competition — collect £1M.',                                   effect: { type: 'money', value: 1000000 } },
 ];
 
 // Card lookup maps
