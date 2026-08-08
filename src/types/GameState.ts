@@ -126,12 +126,62 @@ export interface AuctionState {
   status: 'active' | 'complete';
 }
 
+// ─── Partnership ─────────────────────────────────────────────────────────────
+
+export interface PartnershipEquity {
+  playerId: string;
+  percentage: number;           // 1–99, all partners must sum to 100
+}
+
+export interface Partnership {
+  partnershipId: string;
+  colorGroup: ColorGroup;
+  partners: PartnershipEquity[];  // 2–3 entries
+  status: 'pending' | 'active';
+  createdAt: number;
+}
+
+export interface PartnershipProposal {
+  proposalId: string;
+  initiatorId: string;
+  colorGroup: ColorGroup;
+  proposedEquity: PartnershipEquity[];
+  acceptedPlayerIds: string[];    // initiator is auto-accepted
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+}
+
+export interface PartnershipDissolutionRequest {
+  dissolutionId: string;
+  partnershipId: string;
+  requesterId: string;
+  acceptedPlayerIds: string[];
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+}
+
+// ─── Rent Deal ───────────────────────────────────────────────────────────────
+
+export interface RentDeal {
+  dealId: string;
+  debtorId: string;
+  creditorIds: string[];          // 1 player or multiple (partnership)
+  spaceIndex: number;
+  totalRentOwed: number;
+  offeredProperties: number[];    // debtor's properties being given to creditor
+  offeredMoney: number;           // debtor's cash being given to creditor
+  requestedExemption: number;     // amount of rent creditor will exempt (up to totalRentOwed)
+  lastOfferBy: string;            // playerId who made the last offer/counter
+  acceptedPlayerIds: string[];
+  status: 'pending' | 'accepted' | 'rejected' | 'countered' | 'cancelled';
+}
+
 // ─── Player ───────────────────────────────────────────────────────────────────
 
 export interface Player {
   id: string;
   name: string;
   token: TokenType;
+  character?: string;         // optional client-chosen character id/name (cosmetic)
+  characterColor?: string;    // optional client-chosen character base colour hex (cosmetic)
   position: number;           // 0–39 board space index
   money: number;
   properties: number[];       // owned space indices
@@ -143,6 +193,8 @@ export interface Player {
   isHost: boolean;
   isReady: boolean;
   reconnectToken: string;     // stored in client localStorage for rejoin
+  goDeductionsUsed: number;   // 0–5, lifetime GO deductions taken
+  goSkipsRemaining: number;   // GO salary skips remaining from deductions
 }
 
 // ─── Property State ───────────────────────────────────────────────────────────
@@ -172,7 +224,7 @@ export interface TurnState {
 
 // ─── Game Log ─────────────────────────────────────────────────────────────────
 
-export type GameLogType = 'action' | 'system' | 'card' | 'trade';
+export type GameLogType = 'action' | 'system' | 'card' | 'trade' | 'partnership';
 
 export interface GameLogEntry {
   timestamp: number;
@@ -190,6 +242,17 @@ export interface GameConfig {
   specialRules: Record<string, boolean>;
 }
 
+// ─── Dev Hacks ───────────────────────────────────────────────────────────────
+
+export interface DevHacks {
+  unlimitedMoney: boolean;          // Starting money = 999M
+  soloPlay: boolean;                // Allow 1-player game start
+  alwaysLandOnMayfair: boolean;     // Override move → always land on position 39
+  alwaysLandOnCard: boolean;        // Override move → cycle through Chance/Community Chest spaces
+  sameTurn: boolean;                // Never advance turn to next player
+  preAssignProperties: boolean;     // Pre-assign test properties on game start
+}
+
 // ─── Master Game State ────────────────────────────────────────────────────────
 
 export interface GameState {
@@ -203,8 +266,14 @@ export interface GameState {
   chanceDiscard: number[];
   turn: TurnState;
   activeTrade: TradeOffer | null;
+  partnerships: Partnership[];
+  activePartnershipProposal: PartnershipProposal | null;
+  activePartnershipDissolution: PartnershipDissolutionRequest | null;
+  freeParkingPool: number;
+  activeRentDeal: RentDeal | null;
   log: GameLogEntry[];
   config: GameConfig;
+  devHacks: DevHacks;
   winnerId: string | null;
   createdAt: number;
   lastActionAt: number;

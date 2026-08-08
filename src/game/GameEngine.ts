@@ -58,6 +58,10 @@ export class GameEngine {
     if (phase !== 'action' && phase !== 'end') return 'You cannot end your turn right now.';
     if (room.state.turn.auctionState?.status === 'active') return 'An auction is still in progress.';
     if (room.state.activeTrade) return 'A trade is still in progress.';
+    if (room.state.activeRentDeal) return 'A rent deal is still in progress.';
+    if (room.state.activePartnershipProposal) return 'A partnership proposal is still active.';
+    if (room.state.activePartnershipDissolution) return 'A partnership dissolution request is still active.';
+    if (room.state.turn.mustPayRent) return 'You must resolve your debt before ending your turn.';
     return null;
   }
 
@@ -90,12 +94,21 @@ export class GameEngine {
 
     const prop = room.getPropertyState(spaceIndex);
     if (!prop) return 'Property not found.';
-    if (prop.ownerId !== playerId) return 'You do not own this property.';
     if (prop.isMortgaged) return 'Property is mortgaged.';
     if (prop.hasHotel) return 'Property already has a hotel.';
     if (prop.houses >= RULES.MAX_HOUSES_PER_PROPERTY) return 'Maximum houses reached. Upgrade to hotel.';
 
-    // Must own full color group
+    // Check if partnership exists for this group
+    const partnership = space.colorGroup ? room.getPartnershipForGroup(space.colorGroup) : undefined;
+
+    if (partnership) {
+      // Partnership building — delegate to partnership-specific validation
+      return this.canBuildHousePartnership(room, playerId, spaceIndex);
+    }
+
+    // Solo building — must own property and full color group
+    if (prop.ownerId !== playerId) return 'You do not own this property.';
+
     const group = COLOR_GROUPS[space.colorGroup!];
     if (!group.every(idx => room.getPropertyState(idx)?.ownerId === playerId)) {
       return 'You must own all properties in this color group.';
@@ -209,11 +222,13 @@ export class GameEngine {
       if (!from.properties.includes(idx)) return `You do not own property at space ${idx}.`;
       const prop = room.getPropertyState(idx)!;
       if (prop.houses > 0 || prop.hasHotel) return 'Cannot trade properties with buildings. Sell buildings first.';
+      if (room.isPropertyInPartnership(idx)) return 'Cannot trade properties in an active partnership. Dissolve the partnership first.';
     }
     for (const idx of requestedProperties) {
       if (!to.properties.includes(idx)) return `Target does not own property at space ${idx}.`;
       const prop = room.getPropertyState(idx)!;
       if (prop.houses > 0 || prop.hasHotel) return 'Cannot trade properties with buildings.';
+      if (room.isPropertyInPartnership(idx)) return 'Cannot trade properties in an active partnership.';
     }
 
     // Verify money
@@ -247,6 +262,68 @@ export class GameEngine {
     const auction = room.state.turn.auctionState;
     if (!auction || auction.status !== 'active') return 'No active auction.';
     if (!auction.activeBidderIds.includes(playerId)) return 'You are not in this auction.';
+    return null;
+  }
+
+  // ── Debt settlement guards ──────────────────────────────────────────────────
+
+  /**
+   * What a proposed settlement is worth, in server terms.
+   *
+   * `deedCredit` is the face value of the deeds being handed over (mortgage
+   * value if mortgaged, list price otherwise) and `cashOwed` is what is left to
+   * find in cash. Pure — the caller decides what to do with the numbers.
+   */
+  static quoteRentSettlement(
+    room: GameRoom, properties: number[],
+  ): { totalRent: number; deedCredit: number; cashOwed: number } {
+    const totalRent = room.state.turn.rentAmount ?? 0;
+    let deedCredit = 0;
+    for (const idx of properties) deedCredit += room.deedSettlementValue(idx);
+    return { totalRent, deedCredit, cashOwed: Math.max(0, totalRent - deedCredit) };
+  }
+
+  /**
+   * Can this player pay off the rent they could not afford when they landed?
+   *
+   * This is the exit from `turn.mustPayRent`, which `canEndTurn` otherwise
+   * blocks on forever. `properties` are deeds offered in lieu of cash and may
+   * be empty, which is the plain "I have raised the money, take it" case.
+   */
+  static canSettleRentDebt(room: GameRoom, playerId: string, properties: number[]): string | null {
+    if (room.state.status !== 'in-progress') return 'Game is not in progress.';
+    if (!this.isCurrentPlayer(room, playerId)) return 'It is not your turn.';
+
+    const player = room.getPlayer(playerId);
+    if (!player) return 'Player not found.';
+    if (player.isBankrupt) return 'You are bankrupt.';
+
+    if (!room.state.turn.mustPayRent) return 'You have no outstanding debt to settle.';
+    const totalRent = room.state.turn.rentAmount;
+    if (totalRent === null || totalRent <= 0) return 'You have no outstanding debt to settle.';
+
+    // Mirrors canEndTurn: a live negotiation owns the debt until it resolves,
+    // otherwise an accepted exemption could be applied to a debt already paid.
+    if (room.state.activeRentDeal) return 'A rent deal is still in progress.';
+
+    const seen = new Set<number>();
+    for (const idx of properties) {
+      if (!Number.isInteger(idx)) return 'Invalid property index.';
+      if (seen.has(idx)) return `Property at space ${idx} is listed more than once.`;
+      seen.add(idx);
+
+      const prop = room.getPropertyState(idx);
+      if (!prop) return `Property at space ${idx} not found.`;
+      if (prop.ownerId !== playerId || !player.properties.includes(idx)) {
+        return `You do not own property at space ${idx}.`;
+      }
+      if (prop.houses > 0 || prop.hasHotel) return 'Cannot hand over properties with buildings. Sell the buildings first.';
+      if (room.isPropertyInPartnership(idx)) return 'Cannot hand over properties in an active partnership.';
+    }
+
+    const { cashOwed } = this.quoteRentSettlement(room, properties);
+    if (player.money < cashOwed) return `You cannot cover the remaining £${cashOwed} of the debt.`;
+
     return null;
   }
 
@@ -284,6 +361,162 @@ export class GameEngine {
     }
 
     return total;
+  }
+
+  // ── GO Deduction guards ────────────────────────────────────────────────────
+
+  static canGoDeduction(room: GameRoom, playerId: string, count: number): string | null {
+    if (room.state.status !== 'in-progress') return 'Game is not in progress.';
+    const player = room.getPlayer(playerId);
+    if (!player) return 'Player not found.';
+    if (player.isBankrupt) return 'You are bankrupt.';
+    if (count < 1) return 'Must deduct at least 1.';
+    if (player.goDeductionsUsed + count > 5) return `Cannot exceed 5 lifetime GO deductions (${player.goDeductionsUsed} already used).`;
+    // Only available when in debt (money < 0 or pending rent)
+    if (player.money >= 0 && !room.state.turn.mustPayRent) return 'GO deduction is only available when in debt.';
+    return null;
+  }
+
+  // ── Partnership guards ────────────────────────────────────────────────────
+
+  static canProposePartnership(
+    room: GameRoom, initiatorId: string, colorGroup: string,
+    proposedEquity: { playerId: string; percentage: number }[],
+  ): string | null {
+    if (room.state.status !== 'in-progress') return 'Game is not in progress.';
+    if (room.state.activePartnershipProposal) return 'A partnership proposal is already active.';
+
+    const group = COLOR_GROUPS[colorGroup as keyof typeof COLOR_GROUPS];
+    if (!group) return 'Invalid color group.';
+
+    // Must be a houseable group (not railroad/utility)
+    if (colorGroup === 'railroad' || colorGroup === 'utility') {
+      return 'Partnerships are only for houseable color groups.';
+    }
+
+    // Check no active partnership exists for this group
+    if (room.getPartnershipForGroup(colorGroup as any)) {
+      return 'An active partnership already exists for this color group.';
+    }
+
+    // Validate equity entries
+    if (proposedEquity.length < 2 || proposedEquity.length > 3) {
+      return 'Partnership requires 2-3 partners.';
+    }
+
+    const totalPercentage = proposedEquity.reduce((sum, eq) => sum + eq.percentage, 0);
+    if (totalPercentage !== 100) return 'Equity percentages must sum to 100.';
+
+    for (const eq of proposedEquity) {
+      if (eq.percentage < 1 || eq.percentage > 99) return 'Each partner must have 1-99% equity.';
+      const player = room.getPlayer(eq.playerId);
+      if (!player || player.isBankrupt) return `Player ${eq.playerId} is invalid or bankrupt.`;
+    }
+
+    // Check that proposed partners collectively own all properties in the group
+    const partnerIds = proposedEquity.map(eq => eq.playerId);
+    for (const idx of group) {
+      const prop = room.getPropertyState(idx);
+      if (!prop || !prop.ownerId || !partnerIds.includes(prop.ownerId)) {
+        return 'Proposed partners must collectively own all properties in the color group.';
+      }
+    }
+
+    // Initiator must be one of the partners
+    if (!partnerIds.includes(initiatorId)) {
+      return 'You must be one of the proposed partners.';
+    }
+
+    return null;
+  }
+
+  static canDissolvePartnership(room: GameRoom, playerId: string, partnershipId: string): string | null {
+    if (room.state.status !== 'in-progress') return 'Game is not in progress.';
+    if (room.state.activePartnershipDissolution) return 'A dissolution request is already active.';
+
+    const partnership = room.getPartnershipById(partnershipId);
+    if (!partnership || partnership.status !== 'active') return 'Partnership not found or inactive.';
+
+    if (!partnership.partners.some(p => p.playerId === playerId)) {
+      return 'You are not a partner in this partnership.';
+    }
+
+    return null;
+  }
+
+  // ── Rent Deal guards ──────────────────────────────────────────────────────
+
+  static canOfferRentDeal(
+    room: GameRoom, debtorId: string,
+    offeredProperties: number[], offeredMoney: number, requestedExemption: number,
+    totalRentOwed: number,
+  ): string | null {
+    if (room.state.status !== 'in-progress') return 'Game is not in progress.';
+    if (room.state.activeRentDeal) return 'A rent deal is already active.';
+
+    const debtor = room.getPlayer(debtorId);
+    if (!debtor) return 'Player not found.';
+    if (!room.state.turn.mustPayRent) return 'No pending rent to negotiate.';
+
+    if (requestedExemption < 0 || requestedExemption > totalRentOwed) {
+      return 'Exemption must be between 0 and total rent owed.';
+    }
+
+    if (offeredMoney < 0) return 'Offered money must be non-negative.';
+    if (offeredMoney > debtor.money) return 'You cannot afford to offer that much money.';
+
+    for (const idx of offeredProperties) {
+      if (!debtor.properties.includes(idx)) return `You do not own property at space ${idx}.`;
+      const prop = room.getPropertyState(idx)!;
+      if (prop.houses > 0 || prop.hasHotel) return 'Cannot offer properties with buildings.';
+      if (room.isPropertyInPartnership(idx)) return 'Cannot offer partnered properties.';
+    }
+
+    return null;
+  }
+
+  // ── Trade guards (partnership-aware) ──────────────────────────────────────
+
+  static isPropertyInPartnership(room: GameRoom, spaceIndex: number): boolean {
+    return room.isPropertyInPartnership(spaceIndex);
+  }
+
+  // ── Building guards (partnership-aware) ───────────────────────────────────
+
+  static canBuildHousePartnership(
+    room: GameRoom, playerId: string, spaceIndex: number,
+  ): string | null {
+    const space = BOARD_SPACES.find(s => s.index === spaceIndex);
+    if (!space || space.type !== 'property') return 'Not a property.';
+
+    const prop = room.getPropertyState(spaceIndex);
+    if (!prop) return 'Property not found.';
+    if (prop.isMortgaged) return 'Property is mortgaged.';
+    if (prop.hasHotel) return 'Property already has a hotel.';
+    if (prop.houses >= RULES.MAX_HOUSES_PER_PROPERTY) return 'Maximum houses reached. Upgrade to hotel.';
+
+    const partnership = space.colorGroup ? room.getPartnershipForGroup(space.colorGroup) : undefined;
+    if (!partnership) return 'No partnership exists for this color group.';
+
+    // Player must be a partner
+    if (!partnership.partners.some(p => p.playerId === playerId)) {
+      return 'You are not a partner in this color group.';
+    }
+
+    // No mortgaged properties in group
+    const group = COLOR_GROUPS[space.colorGroup!];
+    if (group.some(idx => room.getPropertyState(idx)?.isMortgaged)) {
+      return 'All properties in the color group must be unmortgaged.';
+    }
+
+    // Check all partners can afford their share
+    for (const partner of partnership.partners) {
+      const p = room.getPlayer(partner.playerId);
+      const share = Math.ceil(space.houseCost! * partner.percentage / 100);
+      if (p && p.money < share) return `Partner ${p.name} cannot afford their share (£${share}).`;
+    }
+
+    return null;
   }
 
   // ── Space helpers ───────────────────────────────────────────────────────────

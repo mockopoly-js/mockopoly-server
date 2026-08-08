@@ -20,14 +20,14 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
   // ── Create Room ─────────────────────────────────────────────────────────────
 
   socket.on(EVENTS.ROOM_CREATE, (data: C_RoomCreate) => {
-    const { playerName, token } = data;
+    const { playerName, token, character, characterColor } = data;
 
     // Validate
     if (!playerName || playerName.trim().length === 0) {
       return socket.emit(EVENTS.ERROR, { code: 'INVALID_NAME', message: 'Player name is required.' } satisfies S_Error);
     }
 
-    const room = gameManager.createRoom(socket.id, playerName.trim(), token);
+    const room = gameManager.createRoom(socket.id, playerName.trim(), token, character, characterColor);
     const player = room.getPlayerBySocketId(socket.id)!;
 
     // Join the Socket.io room
@@ -48,7 +48,7 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
   // ── Join Room ───────────────────────────────────────────────────────────────
 
   socket.on(EVENTS.ROOM_JOIN, (data: C_RoomJoin) => {
-    const { roomCode, playerName, token, reconnectToken } = data;
+    const { roomCode, playerName, token, character, characterColor, reconnectToken } = data;
 
     const room = gameManager.getRoom(roomCode.toUpperCase());
     if (!room) {
@@ -91,7 +91,7 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
 
     const playerId = uuid();
     const reconnect = uuid();
-    const player = room.addPlayer(playerId, socket.id, playerName.trim(), token, reconnect, false);
+    const player = room.addPlayer(playerId, socket.id, playerName.trim(), token, reconnect, false, character, characterColor);
 
     socket.join(roomCode);
     (socket as any).playerId = playerId;
@@ -99,6 +99,8 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
 
     socket.emit(EVENTS.ROOM_JOINED, { state: room.state } satisfies S_RoomJoined);
     socket.to(roomCode).emit(EVENTS.ROOM_PLAYER_JOINED, { player } satisfies S_PlayerJoined);
+    // Broadcast updated state so all clients (including host) see the new player
+    io.to(roomCode).emit(EVENTS.GAME_STATE_UPDATE, { state: room.state } satisfies S_StateUpdate);
 
     console.log(`[room] ${playerName} joined room ${roomCode} (${room.state.players.length} players)`);
   });
@@ -139,9 +141,9 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       return socket.emit(EVENTS.ERROR, { code: 'NOT_HOST', message: 'Only the host can start the game.' } satisfies S_Error);
     }
 
-    // DEV: allow 1 player for testing. Change to < 2 for production.
-    if (room.state.players.length < 1) {
-      return socket.emit(EVENTS.ERROR, { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 1 player.' } satisfies S_Error);
+    const minPlayers = room.state.devHacks.soloPlay ? 1 : 2;
+    if (room.state.players.length < minPlayers) {
+      return socket.emit(EVENTS.ERROR, { code: 'NOT_ENOUGH_PLAYERS', message: `Need at least ${minPlayers} player(s).` } satisfies S_Error);
     }
 
     if (!room.allReady()) {

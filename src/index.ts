@@ -5,6 +5,9 @@ import cors from 'cors';
 import { registerRoomHandlers } from './socket/roomHandlers';
 import { registerGameHandlers } from './socket/gameHandlers';
 import { registerTradeHandlers } from './socket/tradeHandlers';
+import { registerPartnershipHandlers } from './socket/partnershipHandlers';
+import { registerDealHandlers } from './socket/dealHandlers';
+import { registerDevHandlers } from './socket/devHandlers';
 import { gameManager } from './game/GameManager';
 
 const app = express();
@@ -12,8 +15,11 @@ const httpServer = createServer(app);
 
 const PORT = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+// In production, enforce CLIENT_URL for CORS origin. In dev/LAN, allow any origin
+// so phones on changing LAN IPs can connect without network config changes.
+const CORS_ORIGIN = process.env.NODE_ENV === 'production' ? CLIENT_URL : true;
 
-app.use(cors({ origin: CLIENT_URL }));
+app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
@@ -26,7 +32,7 @@ app.get('/health', (_req, res) => {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: CLIENT_URL,
+    origin: CORS_ORIGIN,
     methods: ['GET', 'POST'],
   },
 });
@@ -37,6 +43,9 @@ io.on('connection', (socket) => {
   registerRoomHandlers(io, socket);
   registerGameHandlers(io, socket);
   registerTradeHandlers(io, socket);
+  registerPartnershipHandlers(io, socket);
+  registerDealHandlers(io, socket);
+  registerDevHandlers(io, socket);
 });
 
 // Periodic cleanup of idle rooms (every 10 minutes)
